@@ -53,7 +53,8 @@ jobs:
       - name: Prepare installable APK
         run: cp frontend/wallets-hub-web/android/app/build/outputs/apk/release/app-release.apk wallets-hub.apk
       - name: Verify APK signature
-        run: "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs wallets-hub.apk
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs wallets-hub.apk
       - name: Replace current Android release
         env:
           GH_TOKEN: ${{ github.token }}
