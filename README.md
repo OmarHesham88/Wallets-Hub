@@ -72,9 +72,9 @@ Every push to `main` independently runs **Publish Android preview** and creates 
 Codex maintains and commits the standalone repository locally. From a normal Windows PowerShell session, publish the prepared commit with one command:
 
 ```powershell
-& "D:\ServiceHub\ServiceHub_Store\ServiceHub System\Code\WalletsHub\Publish-WalletsHub.ps1"
+& "D:\ServiceHub\ServiceHub_Store\ServiceHub System\Code\WalletsHub\Publish-WalletsHub.cmd"
 ```
 
-The script verifies the repository, configures the exact Git safe-directory entry when necessary, pushes `main`, prints the permanent APK link, and opens the Actions page. It refuses to publish uncommitted files so partially prepared changes cannot be uploaded accidentally.
+The launcher uses a process-only PowerShell execution-policy bypass; it does not weaken the system or user policy. The script verifies the repository, configures the exact Git safe-directory entry when necessary, pushes `main`, prints the permanent APK link, and opens the Actions page. It refuses to publish uncommitted files so partially prepared changes cannot be uploaded accidentally.
 
 Subscription billing is intentionally deferred. Organization and owner lifecycle management are already separated so limits and billing can be added without redesigning tenant data.
