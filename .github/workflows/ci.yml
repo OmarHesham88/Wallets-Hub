@@ -34,6 +34,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/wallets-hub-web/package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm run build
 

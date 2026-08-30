@@ -19,7 +19,7 @@ jobs:
       - name: Build production images
         run: |
           docker build --file src/WalletsHub.Api/Dockerfile --tag walletshub-api:latest .
-          docker build --file frontend/wallets-hub-web/Dockerfile --build-arg API_INTERNAL_URL=http://walletshub-api:8080 --tag walletshub-web:latest .
+          docker build --file frontend/wallets-hub-web/Dockerfile --build-arg API_INTERNAL_URL=http://walletshub-api:8080 --build-arg NEXT_PUBLIC_BASE_PATH=/wallets --tag walletshub-web:latest .
       - name: Package release
         run: |
           docker save walletshub-api:latest walletshub-web:latest | gzip -1 > /tmp/walletshub-images.tar.gz
@@ -45,26 +45,21 @@ jobs:
         run: |
           ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
-          install -d /opt/walletshub
-          test -f /opt/walletshub/.env.production || { echo '/opt/walletshub/.env.production is required'; exit 1; }
-          tar -xzf /tmp/walletshub-source.tar.gz -C /opt/walletshub
+          install -d "$HOME/walletshub"
+          test -f "$HOME/walletshub/.env.production" || { echo "$HOME/walletshub/.env.production is required"; exit 1; }
+          find "$HOME/walletshub" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password -exec rm -rf -- {} +
+          tar -xzf /tmp/walletshub-source.tar.gz -C "$HOME/walletshub"
           gzip -dc /tmp/walletshub-images.tar.gz | docker load
-          cd /opt/walletshub
+          cd "$HOME/walletshub"
           docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --remove-orphans
-          if ! grep -q 'wallets.servicehub.ink' /opt/servicehub/Caddyfile; then
-            printf '\n' >> /opt/servicehub/Caddyfile
-            cat deploy/Caddyfile.walletshub >> /opt/servicehub/Caddyfile
-          fi
-          cd /opt/servicehub
-          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --force-recreate caddy
           for attempt in $(seq 1 36); do
-            if curl --fail --silent --show-error https://wallets.servicehub.ink/login >/dev/null; then
+            if curl --fail --silent --show-error https://servicehub.ink/wallets/login >/dev/null; then
               rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz
               exit 0
             fi
             sleep 5
           done
-          cd /opt/walletshub
+          cd "$HOME/walletshub"
           docker compose --env-file .env.production -f docker-compose.production.yml ps
           exit 1
           REMOTE

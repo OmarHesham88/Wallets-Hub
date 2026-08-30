@@ -61,11 +61,13 @@ New provider variations must be added with regression samples in `WalletMessageP
 
 ## Production
 
-Copy `.env.production.example` to `/opt/walletshub/.env.production` and replace every secret. The recommended hostname is `wallets.servicehub.ink`. The compose file connects the web container to the existing `servicehub_default` reverse-proxy network while keeping its database and API isolated. The repository's manual deployment workflow installs the included Caddy route when needed.
+Copy `.env.production.example` to the deployment directory as `.env.production` and replace every secret. The production application is served at `https://servicehub.ink/wallets/`. The compose file connects only the web container to the existing `servicehub_default` reverse-proxy network while keeping its database and API isolated.
 
-## Android preview download
+## Android download
 
-Every push to `main` independently runs **Publish Android preview** and creates the stable release asset `wallets-hub-preview.apk`. The Android release therefore is not blocked by an unrelated reporting failure in another CI job. Because preview builds use GitHub's temporary debug signing identity, users may need to uninstall an older preview before installing a newly generated one. Configure a permanent protected signing key before customer production distribution.
+Every push to `main` independently runs **Publish Android release** and creates the permanently signed release asset `wallets-hub.apk`. Users of the old preview must uninstall it once; later signed releases can update the installed application normally.
+
+`https://github.com/OmarHesham88/Wallets-Hub/releases/download/android-latest/wallets-hub.apk`
 
 ## Publishing without a connected GitHub plugin
 

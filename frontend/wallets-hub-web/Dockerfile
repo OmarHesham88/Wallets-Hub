@@ -8,7 +8,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/wallets-hub-web/ .
 ARG API_INTERNAL_URL=http://walletshub-api:8080
+ARG NEXT_PUBLIC_BASE_PATH=/wallets
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
 RUN npm run build
 
 FROM node:22-alpine

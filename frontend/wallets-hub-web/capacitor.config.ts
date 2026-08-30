@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: "out",
   backgroundColor: "#f7faf8",
   loggingBehavior: "none",
-  server: { url: "https://wallets.servicehub.ink/pair-device", hostname: "app.wallets.servicehub.ink", androidScheme: "https" },
+  server: { url: "https://servicehub.ink/wallets/pair-device", hostname: "servicehub.ink", androidScheme: "https" },
   android: { allowMixedContent: false, webContentsDebuggingEnabled: false },
 };
 export default config;

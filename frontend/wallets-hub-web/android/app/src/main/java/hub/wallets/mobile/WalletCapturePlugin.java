@@ -57,7 +57,7 @@ public class WalletCapturePlugin extends Plugin {
     public void configure(PluginCall call) {
         String deviceId = call.getString("deviceId"); String token = call.getString("deviceToken");
         if (deviceId == null || token == null) { call.reject("Pairing response is incomplete."); return; }
-        prefs(getContext()).edit().putString(DEVICE_ID, deviceId).putString(DEVICE_TOKEN, token).putString(API_URL, "https://wallets.servicehub.ink").apply();
+        prefs(getContext()).edit().putString(DEVICE_ID, deviceId).putString(DEVICE_TOKEN, token).putString(API_URL, "https://servicehub.ink/wallets").apply();
         call.resolve();
     }
 
