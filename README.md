@@ -65,6 +65,16 @@ Copy `.env.production.example` to `/opt/walletshub/.env.production` and replace 
 
 ## Android preview download
 
-Every successful CI run on `main` automatically runs **Publish Android preview** and creates the stable release asset `wallets-hub-preview.apk`. Because preview builds use GitHub's temporary debug signing identity, users may need to uninstall an older preview before installing a newly generated one. Configure a permanent protected signing key before customer production distribution.
+Every push to `main` independently runs **Publish Android preview** and creates the stable release asset `wallets-hub-preview.apk`. The Android release therefore is not blocked by an unrelated reporting failure in another CI job. Because preview builds use GitHub's temporary debug signing identity, users may need to uninstall an older preview before installing a newly generated one. Configure a permanent protected signing key before customer production distribution.
+
+## Publishing without a connected GitHub plugin
+
+Codex maintains and commits the standalone repository locally. From a normal Windows PowerShell session, publish the prepared commit with one command:
+
+```powershell
+& "D:\ServiceHub\ServiceHub_Store\ServiceHub System\Code\WalletsHub\Publish-WalletsHub.ps1"
+```
+
+The script verifies the repository, configures the exact Git safe-directory entry when necessary, pushes `main`, prints the permanent APK link, and opens the Actions page. It refuses to publish uncommitted files so partially prepared changes cannot be uploaded accidentally.
 
 Subscription billing is intentionally deferred. Organization and owner lifecycle management are already separated so limits and billing can be added without redesigning tenant data.
