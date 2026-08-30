@@ -7,6 +7,7 @@ RUN dotnet publish src/WalletsHub.Api/WalletsHub.Api.csproj -c Release -o /app -
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
 WORKDIR /app
+RUN apk add --no-cache krb5-libs
 COPY --from=build /app .
 USER app
 EXPOSE 8080

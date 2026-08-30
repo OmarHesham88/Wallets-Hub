@@ -30,6 +30,13 @@ services:
         condition: service_healthy
     restart: "no"
 
+  walletshub-keys-init:
+    image: alpine:3.22
+    command: ["sh", "-c", "chown -R 1654:1654 /keys"]
+    volumes:
+      - walletshub-keys:/keys
+    restart: "no"
+
   walletshub-seed:
     image: walletshub-api:latest
     command: ["--seed"]
@@ -47,6 +54,8 @@ services:
     expose: ["8080"]
     depends_on:
       walletshub-seed:
+        condition: service_completed_successfully
+      walletshub-keys-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live >/dev/null || exit 1"]
