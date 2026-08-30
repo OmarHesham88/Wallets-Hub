@@ -65,6 +65,6 @@ Copy `.env.production.example` to `/opt/walletshub/.env.production` and replace 
 
 ## Android preview download
 
-Run the **Publish Android preview** workflow after pushing this repository. It creates the stable release asset `wallets-hub-preview.apk`. Because preview builds use GitHub's temporary debug signing identity, users may need to uninstall an older preview before installing a newly generated one. Configure a permanent protected signing key before customer production distribution.
+Every successful CI run on `main` automatically runs **Publish Android preview** and creates the stable release asset `wallets-hub-preview.apk`. Because preview builds use GitHub's temporary debug signing identity, users may need to uninstall an older preview before installing a newly generated one. Configure a permanent protected signing key before customer production distribution.
 
 Subscription billing is intentionally deferred. Organization and owner lifecycle management are already separated so limits and billing can be added without redesigning tenant data.

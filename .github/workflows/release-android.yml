@@ -1,6 +1,9 @@
 name: Publish Android preview
 
 on:
+  workflow_run:
+    workflows: [Wallets Hub CI]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -12,6 +15,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
