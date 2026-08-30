@@ -1,0 +1,83 @@
+services:
+  walletshub-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${WALLETSHUB_POSTGRES_DB}
+      POSTGRES_USER: ${WALLETSHUB_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${WALLETSHUB_POSTGRES_PASSWORD}
+    volumes:
+      - walletshub-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WALLETSHUB_POSTGRES_USER} -d ${WALLETSHUB_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  walletshub-migrate:
+    image: walletshub-api:latest
+    build:
+      context: .
+      dockerfile: src/WalletsHub.Api/Dockerfile
+    command: ["--migrate"]
+    environment: &walletshub-api-env
+      ConnectionStrings__Postgres: Host=walletshub-db;Port=5432;Database=${WALLETSHUB_POSTGRES_DB};Username=${WALLETSHUB_POSTGRES_USER};Password=${WALLETSHUB_POSTGRES_PASSWORD}
+      ASPNETCORE_ENVIRONMENT: Production
+      Seed__PlatformEmail: ${WALLETSHUB_PLATFORM_EMAIL}
+      Seed__PlatformPassword: ${WALLETSHUB_PLATFORM_PASSWORD}
+    depends_on:
+      walletshub-db:
+        condition: service_healthy
+    restart: "no"
+
+  walletshub-seed:
+    image: walletshub-api:latest
+    command: ["--seed"]
+    environment: *walletshub-api-env
+    depends_on:
+      walletshub-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  walletshub-api:
+    image: walletshub-api:latest
+    environment: *walletshub-api-env
+    volumes:
+      - walletshub-keys:/home/app/.aspnet/DataProtection-Keys
+    expose: ["8080"]
+    depends_on:
+      walletshub-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  walletshub-web:
+    image: walletshub-web:latest
+    build:
+      context: .
+      dockerfile: frontend/wallets-hub-web/Dockerfile
+      args:
+        API_INTERNAL_URL: http://walletshub-api:8080
+    environment:
+      API_INTERNAL_URL: http://walletshub-api:8080
+    expose: ["3000"]
+    depends_on:
+      walletshub-api:
+        condition: service_healthy
+    networks:
+      - default
+      - servicehub
+    restart: unless-stopped
+
+volumes:
+  walletshub-db:
+  walletshub-keys:
+
+networks:
+  servicehub:
+    external: true
+    name: servicehub_default

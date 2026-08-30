@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Wallets Hub</string>
+    <string name="title_activity_main">Wallets Hub</string>
+    <string name="package_name">hub.wallets.mobile</string>
+    <string name="custom_url_scheme">hub.wallets.mobile</string>
+</resources>

@@ -1,0 +1,48 @@
+name: Publish Android preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: walletshub-android-preview
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/wallets-hub-web/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - uses: android-actions/setup-android@v4
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+        working-directory: frontend/wallets-hub-web
+      - run: npm run mobile:sync
+        working-directory: frontend/wallets-hub-web
+      - run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
+        working-directory: frontend/wallets-hub-web/android
+      - name: Prepare installable APK
+        run: cp frontend/wallets-hub-web/android/app/build/outputs/apk/debug/app-debug.apk wallets-hub-preview.apk
+      - name: Replace preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f android-preview
+          git push origin refs/tags/android-preview --force
+          gh release delete android-preview --yes --cleanup-tag || true
+          git tag -f android-preview
+          git push origin refs/tags/android-preview --force
+          gh release create android-preview wallets-hub-preview.apk --title "Wallets Hub Android Preview" --notes "Installable preview APK. Uninstall an older preview first if Android reports a signing mismatch." --prerelease

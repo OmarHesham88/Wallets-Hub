@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.production.example
+**/node_modules/
+**/.next/
+**/out/
+**/bin/
+**/obj/
+**/build/
+**/.gradle/
+**/local.properties
+**/*.jks
+**/*.keystore
+*.apk
+*.aab
+.android-signing.local.txt

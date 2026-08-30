@@ -1,0 +1,70 @@
+name: Deploy Wallets Hub
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: walletshub-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production images
+        run: |
+          docker build --file src/WalletsHub.Api/Dockerfile --tag walletshub-api:latest .
+          docker build --file frontend/wallets-hub-web/Dockerfile --build-arg API_INTERNAL_URL=http://walletshub-api:8080 --tag walletshub-web:latest .
+      - name: Package release
+        run: |
+          docker save walletshub-api:latest walletshub-web:latest | gzip -1 > /tmp/walletshub-images.tar.gz
+          git archive --format=tar.gz --output=/tmp/walletshub-source.tar.gz HEAD
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/walletshub_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/walletshub_deploy" "$HOME/.ssh/known_hosts"
+      - name: Upload release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: scp -i "$HOME/.ssh/walletshub_deploy" /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
+      - name: Deploy isolated application
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          install -d /opt/walletshub
+          test -f /opt/walletshub/.env.production || { echo '/opt/walletshub/.env.production is required'; exit 1; }
+          tar -xzf /tmp/walletshub-source.tar.gz -C /opt/walletshub
+          gzip -dc /tmp/walletshub-images.tar.gz | docker load
+          cd /opt/walletshub
+          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --remove-orphans
+          if ! grep -q 'wallets.servicehub.ink' /opt/servicehub/Caddyfile; then
+            printf '\n' >> /opt/servicehub/Caddyfile
+            cat deploy/Caddyfile.walletshub >> /opt/servicehub/Caddyfile
+          fi
+          cd /opt/servicehub
+          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --force-recreate caddy
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent --show-error https://wallets.servicehub.ink/login >/dev/null; then
+              rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz
+              exit 0
+            fi
+            sleep 5
+          done
+          cd /opt/walletshub
+          docker compose --env-file .env.production -f docker-compose.production.yml ps
+          exit 1
+          REMOTE

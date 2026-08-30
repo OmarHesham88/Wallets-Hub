@@ -1,0 +1,4 @@
+{$WALLETSHUB_DOMAIN:wallets.servicehub.ink} {
+	encode zstd gzip
+	reverse_proxy walletshub-web:3000
+}
