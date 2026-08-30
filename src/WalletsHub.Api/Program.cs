@@ -306,7 +306,11 @@ static void MapReceipts(WebApplication app)
         var walletQuery = db.Wallets.Where(x => x.OrganizationId == device.OrganizationId && x.DeviceId == device.Id && x.IsActive);
         Wallet? wallet = null;
         if (request.WalletId.HasValue) wallet = await walletQuery.SingleOrDefaultAsync(x => x.Id == request.WalletId);
-        if (wallet is null && !string.IsNullOrWhiteSpace(parsed.Destination)) wallet = await walletQuery.SingleOrDefaultAsync(x => x.NormalizedAccountNumber == NormalizeAccount(parsed.Destination));
+        if (wallet is null && !string.IsNullOrWhiteSpace(parsed.Destination))
+        {
+            var normalizedDestination = NormalizeAccount(parsed.Destination);
+            wallet = await walletQuery.SingleOrDefaultAsync(x => x.NormalizedAccountNumber == normalizedDestination);
+        }
         if (wallet is null)
         {
             var providerCandidates = await walletQuery.Where(x => x.Provider == parsed.Provider).Take(2).ToListAsync();

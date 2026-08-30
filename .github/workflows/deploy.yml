@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build production images
         run: |
           docker build --file src/WalletsHub.Api/Dockerfile --tag walletshub-api:latest .
