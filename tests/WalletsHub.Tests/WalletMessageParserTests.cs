@@ -68,6 +68,19 @@ public sealed class WalletMessageParserTests
     }
 
     [Theory]
+    [InlineData("تم إضافة تحويل لحظي لبطاقتكم مسبقة الدفع بمبلغ 300.00 جم من هدير ابراهيم عبدالدايم سليمان حسن عمار رقم مرجعي 639896513920 يوم 31-08 الساعة 19:43 للمزيد اتصل ب 19623", 300, "هدير ابراهيم عبدالدايم سليمان حسن عمار", "639896513920")]
+    [InlineData("تم إضافة تحويل لحظي لبطاقتكم مسبقة الدفع بمبلغ 5.00 جم من NADIA HISHAM MOHAMED رقم مرجعي 510786897432 يوم 31-08 الساعة 20:28 للمزيد اتصل ب 19623", 5, "NADIA HISHAM MOHAMED", "510786897432")]
+    public void Parses_instant_card_transfer_sms_as_instapay(string message, decimal amount, string sender, string reference)
+    {
+        Assert.True(WalletMessageParser.TryParse("android.sms", message, out var parsed));
+        Assert.Equal("InstaPay", parsed.Provider);
+        Assert.Equal(amount, parsed.Amount);
+        Assert.Equal("EGP", parsed.CurrencyCode);
+        Assert.Equal(sender, parsed.Sender);
+        Assert.Equal(reference, parsed.Reference);
+    }
+
+    [Theory]
     [InlineData("Vodafone Cash: You sent 100 EGP to 01012345678")]
     [InlineData("Your verification code is 778899")]
     [InlineData("A normal personal message received today")]

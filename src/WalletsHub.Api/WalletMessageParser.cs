@@ -20,15 +20,17 @@ public static partial class WalletMessageParser
         new("Bank transfer", ["bank transfer", "account credited", "تم اضافة مبلغ", "تم إضافة مبلغ", "تحويل بنكي"])
     ];
 
-    [GeneratedRegex(@"(?:usdt|egp|usd|جنيه(?:اً|ا)?|دولار|l\.e)\s*[:\-]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)|([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usdt|egp|usd|جنيه(?:اً|ا)?|دولار|l\.e)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:usdt|egp|usd|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|دولار|l\.e)\s*[:\-]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)|([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usdt|egp|usd|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|دولار|l\.e)", RegexOptions.IgnoreCase)]
     private static partial Regex AmountPattern();
     [GeneratedRegex(@"(?:\+?20)?01[0125][0-9]{8}")] private static partial Regex PhonePattern();
-    [GeneratedRegex(@"(?:reference|ref|transaction\s*(?:id|number)|رقم\s*العملية|مرجع)\s*[:#\-]?\s*([a-z0-9\-]{4,})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:reference|ref|transaction\s*(?:id|number)|رقم\s*العملية|رقم\s*مرجع(?:ي)?|مرجع(?:ي)?)\s*[:#\-]?\s*([a-z0-9\-]{4,})", RegexOptions.IgnoreCase)]
     private static partial Regex ReferencePattern();
     [GeneratedRegex(@"(?:wallet|محفظتك|الى رقم|إلى رقم|to)\D{0,20}((?:\+?20)?01[0125][0-9]{8})", RegexOptions.IgnoreCase)]
     private static partial Regex DestinationPattern();
     [GeneratedRegex(@"\bfrom\s+([a-z0-9._-]{2,80})(?:\s+on\b|[.,\r\n]|$)", RegexOptions.IgnoreCase)]
     private static partial Regex NamedSenderPattern();
+    [GeneratedRegex(@"\sمن\s+([\p{L}\s.]{2,120}?)\s+رقم\s+مرجع(?:ي)?", RegexOptions.IgnoreCase)]
+    private static partial Regex ArabicNamedSenderPattern();
 
     public static bool TryParse(string? sourcePackage, string? message, out ParsedWalletMessage parsed)
     {
@@ -42,6 +44,8 @@ public static partial class WalletMessageParser
         // structure, so recognize that structure without depending on the title.
         if (provider is null && IsVodafoneCashReceipt(normalized))
             provider = Providers[0];
+        if (provider is null && IsInstantTransferReceipt(normalized))
+            provider = Providers.Single(rule => rule.Name == "InstaPay");
         if (provider is null) return false;
 
         if (package.Length > 0)
@@ -67,7 +71,10 @@ public static partial class WalletMessageParser
         var destinationMatch = DestinationPattern().Match(text);
         var destination = destinationMatch.Success ? destinationMatch.Groups[1].Value : phones.Skip(1).FirstOrDefault();
         var namedSender = NamedSenderPattern().Match(text);
-        var sender = phones.FirstOrDefault(x => x != destination) ?? (namedSender.Success ? namedSender.Groups[1].Value : null);
+        var arabicNamedSender = ArabicNamedSenderPattern().Match(text);
+        var sender = phones.FirstOrDefault(x => x != destination)
+            ?? (namedSender.Success ? namedSender.Groups[1].Value : null)
+            ?? (arabicNamedSender.Success ? Regex.Replace(arabicNamedSender.Groups[1].Value, @"\s+", " ").Trim() : null);
         var reference = ReferencePattern().Match(text);
         parsed = new(provider.Name, amount, currency, sender, destination, reference.Success ? reference.Groups[1].Value : null);
         return true;
@@ -82,4 +89,11 @@ public static partial class WalletMessageParser
         && value.Contains("من رقم")
         && value.Contains("محفظتك")
         && value.Contains("رقم العملية");
+
+    private static bool IsInstantTransferReceipt(string value)
+    {
+        var canonical = value.Replace('أ', 'ا').Replace('إ', 'ا').Replace('آ', 'ا').Replace('ة', 'ه').Replace('ى', 'ي');
+        return new[] { "تحويل لحظي", "تحويل فوري", "instant transfer", "instant payment", "ipn" }.Any(canonical.Contains)
+            && new[] { "تم اضافه", "تم ايداع", "تم استلام", "credited", "received" }.Any(canonical.Contains);
+    }
 }
