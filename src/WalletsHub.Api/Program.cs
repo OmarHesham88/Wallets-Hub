@@ -83,6 +83,7 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         DROP INDEX IF EXISTS "IX_Wallets_OrganizationId_NormalizedAccountNumber";
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_Wallets_OrganizationId_Provider_NormalizedAccountNumber"
             ON "Wallets" ("OrganizationId", "Provider", "NormalizedAccountNumber");
+        UPDATE "WalletReceipts" SET "Status" = 1 WHERE "Status" <> 1;
         """);
     return;
 }
@@ -136,7 +137,7 @@ static void MapPlatform(WebApplication app)
         var owner = new AppUser
         {
             UserName = request.OwnerEmail.Trim(), Email = request.OwnerEmail.Trim(), DisplayName = request.OwnerName.Trim(),
-            OrganizationId = organization.Id, EmailConfirmed = true, CanConfirmReceipts = true, CanRejectReceipts = true,
+            OrganizationId = organization.Id, EmailConfirmed = true,
             CanViewReports = true, CanExportReports = true, CanManageDevices = true, CanManageTeam = true, VisibleReceiptDays = 3650
         };
         var created = await users.CreateAsync(owner, request.OwnerPassword);
@@ -170,7 +171,7 @@ static void MapTeam(WebApplication app)
         {
             var role = (await users.GetRolesAsync(user)).SingleOrDefault() ?? Roles.Employee;
             var wallets = await db.UserWalletAccess.Where(x => x.UserId == user.Id).Select(x => x.WalletId).ToListAsync();
-            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanConfirmReceipts, user.CanRejectReceipts, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, WalletIds = wallets });
+            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, WalletIds = wallets });
         }
         return Results.Ok(result);
     });
@@ -183,7 +184,6 @@ static void MapTeam(WebApplication app)
         {
             UserName = request.Email.Trim(), Email = request.Email.Trim(), EmailConfirmed = true, DisplayName = request.DisplayName.Trim(), OrganizationId = actor.OrganizationId,
             VisibleReceiptDays = Math.Clamp(request.VisibleReceiptDays, 1, 3650), IsActive = true,
-            CanConfirmReceipts = request.CanConfirmReceipts, CanRejectReceipts = request.CanRejectReceipts,
             CanViewReports = request.CanViewReports, CanExportReports = request.CanExportReports,
             CanManageDevices = request.CanManageDevices, CanManageTeam = request.CanManageTeam
         };
@@ -203,8 +203,6 @@ static void MapTeam(WebApplication app)
         var user = await db.Users.SingleAsync(x => x.Id == id && x.OrganizationId == actor.OrganizationId);
         user.VisibleReceiptDays = Math.Clamp(request.VisibleReceiptDays, 1, 3650);
         user.IsActive = request.IsActive;
-        user.CanConfirmReceipts = request.CanConfirmReceipts;
-        user.CanRejectReceipts = request.CanRejectReceipts;
         user.CanViewReports = request.CanViewReports;
         user.CanExportReports = request.CanExportReports;
         user.CanManageDevices = request.CanManageDevices;
@@ -389,7 +387,7 @@ static void MapReceipts(WebApplication app)
             OrganizationId = device.OrganizationId, WalletId = wallet.Id, DeviceId = device.Id, Provider = parsed.Provider,
             Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference,
             Fingerprint = request.Fingerprint, ProtectedMessage = protection.CreateProtector("WalletsHub.Receipt.v1").Protect(raw),
-            SourcePackage = request.SourcePackage ?? "unknown", ReceivedAtUtc = receivedAt
+            SourcePackage = request.SourcePackage ?? "unknown", Status = ReceiptStatus.Confirmed, ReceivedAtUtc = receivedAt
         };
         db.WalletReceipts.Add(receipt);
         var recipientRoles = await (from candidate in db.Users
@@ -414,31 +412,16 @@ static void MapReceipts(WebApplication app)
     });
 
     var receipts = app.MapGroup("/api/receipts").RequireAuthorization();
-    receipts.MapGet("/", async (DateTime? from, DateTime? to, Guid? walletId, ReceiptStatus? status, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
+    receipts.MapGet("/", async (DateTime? from, DateTime? to, Guid? walletId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
     {
         var user = await RequireOrganizationUser(principal, users);
         var start = from?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-user.VisibleReceiptDays);
         var end = to?.ToUniversalTime() ?? DateTime.UtcNow;
         var query = ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end);
         if (walletId.HasValue) query = query.Where(x => x.WalletId == walletId);
-        if (status.HasValue) query = query.Where(x => x.Status == status);
         var rows = await query.OrderByDescending(x => x.ReceivedAtUtc).Take(1000).Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { Receipt = r, WalletName = w.Name }).ToListAsync();
         var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
-        return Results.Ok(rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Message = Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.Status, x.Receipt.ReceivedAtUtc, x.Receipt.ReviewedByUserId, x.Receipt.ReviewedAtUtc, x.Receipt.ReviewNote }));
-    });
-    receipts.MapPost("/{id:guid}/review", async (Guid id, ReviewRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
-    {
-        var user = await RequireOrganizationUser(principal, users);
-        var receipt = await ScopedReceipts(principal, user, db).SingleAsync(x => x.Id == id);
-        if (receipt.Status != ReceiptStatus.Pending) return Results.Conflict(new { error = "Receipt has already been reviewed." });
-        var action = request.Action.Trim().ToLowerInvariant();
-        if (action == "confirm" && !user.CanConfirmReceipts && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        if (action == "reject" && !user.CanRejectReceipts && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        receipt.Status = action switch { "confirm" => ReceiptStatus.Confirmed, "reject" => ReceiptStatus.Rejected, _ => throw new BadHttpRequestException("Action must be Confirm or Reject.") };
-        receipt.ReviewedByUserId = user.Id; receipt.ReviewedAtUtc = DateTime.UtcNow; receipt.ReviewNote = request.Note?.Trim();
-        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, $"Receipt{receipt.Status}", nameof(WalletReceipt), receipt.Id.ToString()));
-        await db.SaveChangesAsync();
-        return Results.NoContent();
+        return Results.Ok(rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Message = Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc }));
     });
 }
 
@@ -469,7 +452,7 @@ static void MapNotifications(WebApplication app)
     {
         var user = await RequireOrganizationUser(principal, users);
         var preference = await db.NotificationPreferences.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == user.Id && x.WalletId == null);
-        return Results.Ok(preference is null ? new NotificationPreferenceResponse(true, null, true, true, true) : new NotificationPreferenceResponse(preference.EveryReceipt, preference.MinimumAmount, preference.DailySummary, preference.DeviceOffline, preference.RejectedReceipt));
+        return Results.Ok(preference is null ? new NotificationPreferenceResponse(true, null, true, true) : new NotificationPreferenceResponse(preference.EveryReceipt, preference.MinimumAmount, preference.DailySummary, preference.DeviceOffline));
     });
     settings.MapPut("/notifications", async (NotificationPreferenceRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -477,7 +460,7 @@ static void MapNotifications(WebApplication app)
         var preference = await db.NotificationPreferences.SingleOrDefaultAsync(x => x.UserId == user.Id && x.WalletId == null);
         if (preference is null) { preference = new NotificationPreference { OrganizationId = user.OrganizationId!.Value, UserId = user.Id }; db.NotificationPreferences.Add(preference); }
         preference.EveryReceipt = request.EveryReceipt; preference.MinimumAmount = request.MinimumAmount > 0 ? request.MinimumAmount : null;
-        preference.DailySummary = request.DailySummary; preference.DeviceOffline = request.DeviceOffline; preference.RejectedReceipt = request.RejectedReceipt;
+        preference.DailySummary = request.DailySummary; preference.DeviceOffline = request.DeviceOffline; preference.RejectedReceipt = false;
         await db.SaveChangesAsync(); return Results.NoContent();
     });
 }
@@ -491,10 +474,10 @@ static void MapReports(WebApplication app)
         var start = from?.ToUniversalTime() ?? DateTime.UtcNow.Date.AddDays(-30);
         var end = to?.ToUniversalTime() ?? DateTime.UtcNow;
         var query = ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end);
-        var totals = await query.GroupBy(x => new { x.CurrencyCode, x.Status }).Select(g => new { g.Key.CurrencyCode, g.Key.Status, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
-        var wallets = await query.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Where(x => x.Status == ReceiptStatus.Confirmed).Sum(x => x.Amount) }).ToListAsync();
+        var totals = await query.GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
+        var wallets = await query.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
         var names = await db.Wallets.Where(x => x.OrganizationId == user.OrganizationId).ToDictionaryAsync(x => x.Id, x => x.Name);
-        var daily = await query.Where(x => x.Status == ReceiptStatus.Confirmed).GroupBy(x => new { Day = x.ReceivedAtUtc.Date, x.CurrencyCode }).Select(g => new { g.Key.Day, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderBy(x => x.Day).ToListAsync();
+        var daily = await query.GroupBy(x => new { Day = x.ReceivedAtUtc.Date, x.CurrencyCode }).Select(g => new { g.Key.Day, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderBy(x => x.Day).ToListAsync();
         return Results.Ok(new { From = start, To = end, Totals = totals, Wallets = wallets.Select(x => new { x.WalletId, WalletName = names.GetValueOrDefault(x.WalletId, "Wallet"), x.CurrencyCode, x.Count, x.Amount }), Daily = daily });
     }).RequireAuthorization();
     app.MapGet("/api/reports/export.xlsx", async (DateTime? from, DateTime? to, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
@@ -508,7 +491,7 @@ static void MapReports(WebApplication app)
             .OrderByDescending(x => x.Receipt.ReceivedAtUtc).ToListAsync();
         using var workbook = new XLWorkbook();
         var sheet = workbook.Worksheets.Add("Receipts");
-        var headers = new[] { "Received at (UTC)", "Wallet", "Provider", "Sender", "Reference", "Amount", "Currency", "Status", "Reviewed at (UTC)", "Review note" };
+        var headers = new[] { "Received at (UTC)", "Wallet", "Provider", "Sender", "Reference", "Amount", "Currency" };
         for (var column = 0; column < headers.Length; column++) sheet.Cell(1, column + 1).Value = headers[column];
         for (var index = 0; index < rows.Count; index++)
         {
@@ -516,9 +499,7 @@ static void MapReports(WebApplication app)
             sheet.Cell(number, 1).Value = row.Receipt.ReceivedAtUtc; sheet.Cell(number, 2).Value = row.WalletName;
             sheet.Cell(number, 3).Value = row.Receipt.Provider; sheet.Cell(number, 4).Value = row.Receipt.Sender ?? "";
             sheet.Cell(number, 5).Value = row.Receipt.ProviderReference ?? ""; sheet.Cell(number, 6).Value = row.Receipt.Amount;
-            sheet.Cell(number, 7).Value = row.Receipt.CurrencyCode; sheet.Cell(number, 8).Value = row.Receipt.Status.ToString();
-            if (row.Receipt.ReviewedAtUtc.HasValue) sheet.Cell(number, 9).Value = row.Receipt.ReviewedAtUtc.Value;
-            sheet.Cell(number, 10).Value = row.Receipt.ReviewNote ?? "";
+            sheet.Cell(number, 7).Value = row.Receipt.CurrencyCode;
         }
         sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#E8F7EF");
         sheet.SheetView.FreezeRows(1); sheet.Columns().AdjustToContents();
@@ -566,7 +547,7 @@ static void ApplyRoleDefaults(AppUser user, string role)
 {
     if (role is Roles.Owner or Roles.Admin)
     {
-        user.CanConfirmReceipts = user.CanRejectReceipts = user.CanViewReports = user.CanExportReports = user.CanManageDevices = user.CanManageTeam = true;
+        user.CanViewReports = user.CanExportReports = user.CanManageDevices = user.CanManageTeam = true;
         user.VisibleReceiptDays = 3650;
     }
 }
@@ -577,7 +558,7 @@ static async Task SetWalletAccess(WalletsDbContext db, AppUser user, Guid organi
     db.UserWalletAccess.RemoveRange(old);
     db.UserWalletAccess.AddRange(valid.Distinct().Select(id => new UserWalletAccess { UserId = user.Id, WalletId = id }));
 }
-static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanConfirmReceipts, user.CanRejectReceipts, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam };
+static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam };
 static AuditEvent Audit(Guid? organizationId, string? userId, string action, string entityType, string? entityId) => new() { OrganizationId = organizationId, UserId = userId, Action = action, EntityType = entityType, EntityId = entityId };
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 static string NormalizeAccount(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
@@ -594,12 +575,11 @@ static string Unprotect(IDataProtector protector, string value) { try { return p
 public sealed record LoginRequest(string Email, string Password);
 public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword);
 public sealed record ToggleRequest(bool Enabled);
-public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanConfirmReceipts, bool CanRejectReceipts, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
-public sealed record UpdateTeamAccessRequest(bool IsActive, int VisibleReceiptDays, bool CanConfirmReceipts, bool CanRejectReceipts, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
+public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
+public sealed record UpdateTeamAccessRequest(bool IsActive, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
 public sealed record WalletRequest(string Name, string Provider, string AccountNumber, string CurrencyCode, Guid? DeviceId, bool IsActive = true);
 public sealed record DevicePairingRequest(string Name);
 public sealed record PairDeviceRequest(string PairingCode, string InstallationId);
 public sealed record CaptureRequest(Guid? WalletId, string? SourcePackage, string? Title, string? Body, DateTime ReceivedAtUtc, string Fingerprint);
-public sealed record ReviewRequest(string Action, string? Note);
-public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline, bool RejectedReceipt);
-public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline, bool RejectedReceipt);
+public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
+public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);

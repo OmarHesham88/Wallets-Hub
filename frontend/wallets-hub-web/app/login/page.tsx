@@ -48,10 +48,10 @@ export default function LoginPage() {
           <h1>
             Know when money arrives.
             <br />
-            Know who confirmed it.
+            See it in your reports instantly.
           </h1>
           <p>
-            Connect wallet phones, assign employee access, verify receipts, and
+            Connect wallet phones, assign employee access, capture receipts, and
             understand every EGP, USD, or USDT movement from a clean operational
             dashboard.
           </p>
@@ -62,7 +62,7 @@ export default function LoginPage() {
             </span>
             <span>
               <CheckCircle2 />
-              Audited confirmation
+              Instant reporting
             </span>
           </div>
         </div>

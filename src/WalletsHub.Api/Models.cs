@@ -89,7 +89,7 @@ public sealed class WalletReceipt
     public required string Fingerprint { get; set; }
     public required string ProtectedMessage { get; set; }
     public required string SourcePackage { get; set; }
-    public ReceiptStatus Status { get; set; }
+    public ReceiptStatus Status { get; set; } = ReceiptStatus.Confirmed;
     public DateTime ReceivedAtUtc { get; set; }
     public string? ReviewedByUserId { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }

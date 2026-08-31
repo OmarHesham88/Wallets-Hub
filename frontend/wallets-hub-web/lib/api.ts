@@ -1,7 +1,7 @@
 export type User = {
   id: string; displayName: string; email: string; role: "PlatformAdmin" | "Owner" | "Admin" | "Manager" | "Employee";
   organizationId?: string; organizationName?: string; organizationSlug?: string; visibleReceiptDays: number;
-  canConfirmReceipts: boolean; canRejectReceipts: boolean; canViewReports: boolean; canExportReports: boolean;
+  canViewReports: boolean; canExportReports: boolean;
   canManageDevices: boolean; canManageTeam: boolean;
 };
 

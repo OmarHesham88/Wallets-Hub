@@ -5,6 +5,21 @@ namespace WalletsHub.Tests;
 
 public sealed class WalletMessageParserTests
 {
+    [Fact]
+    public void New_receipts_are_confirmed_automatically()
+    {
+        var receipt = new WalletReceipt
+        {
+            Provider = "InstaPay",
+            CurrencyCode = "EGP",
+            Fingerprint = "test",
+            ProtectedMessage = "test",
+            SourcePackage = "sms"
+        };
+
+        Assert.Equal(ReceiptStatus.Confirmed, receipt.Status);
+    }
+
     [Theory]
     [InlineData("Vodafone Cash: You received EGP 1,250.50 from 01012345678. Transaction ID 778899", "Vodafone Cash", 1250.50, "EGP")]
     [InlineData("Orange Cash money received: 500 EGP from 01123456789 ref: ORG-7788", "Orange Cash", 500, "EGP")]

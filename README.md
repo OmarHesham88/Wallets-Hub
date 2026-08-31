@@ -14,7 +14,7 @@ Platform administrators cannot read client receipt data through the API. Every o
 
 ## Applications
 
-- `src/WalletsHub.Api`: ASP.NET Core API, Identity authentication, PostgreSQL persistence, pairing, parser, receipt review, reporting, and auditing.
+- `src/WalletsHub.Api`: ASP.NET Core API, Identity authentication, PostgreSQL persistence, pairing, payment capture, reporting, and auditing.
 - `frontend/wallets-hub-web`: responsive Next.js web dashboard and Capacitor Android application.
 - `tests/WalletsHub.Tests`: provider parser regression suite.
 - `docker-compose.production.yml`: independent PostgreSQL, API, and web deployment.
@@ -55,7 +55,9 @@ Capture sources are intentionally separated: Vodafone Cash and InstaPay/instant-
 
 ## Provider engine
 
-The provider engine recognizes Arabic and English payment formats, normalizes Arabic digits, separates EGP, USD, and USDT, extracts sender/destination/reference fields, rejects outgoing messages and wrong capture channels, and preserves the encrypted original message for review. The active production routes are Vodafone Cash and InstaPay through SMS and Binance through notifications.
+The provider engine recognizes Arabic and English payment formats, normalizes Arabic digits, separates EGP, USD, and USDT, extracts sender/destination/reference fields, rejects outgoing messages and wrong capture channels, and preserves the encrypted original message for reference. The active production routes are Vodafone Cash and InstaPay through SMS and Binance through notifications.
+
+Every captured payment is treated as received immediately. There is no manual confirmation or rejection queue: dashboards, reports, and exports include all captured payments directly.
 
 New provider variations must be added with regression samples in `WalletMessageParserTests.cs` before release.
 
