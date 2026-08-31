@@ -241,6 +241,21 @@ static void MapWallets(WebApplication app)
         await db.SaveChangesAsync();
         return Results.NoContent();
     });
+    wallets.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (wallet is null) return Results.NotFound();
+        if (await db.WalletReceipts.AnyAsync(x => x.WalletId == id))
+            return Results.Conflict(new { error = "This wallet has received-money history and cannot be deleted. Pause it instead to preserve your records." });
+        var preferences = await db.NotificationPreferences.Where(x => x.WalletId == id).ToListAsync();
+        foreach (var preference in preferences) preference.WalletId = null;
+        db.Wallets.Remove(wallet);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletDeleted", nameof(Wallet), wallet.Id.ToString()));
+        await db.SaveChangesAsync();
+        return Results.NoContent();
+    });
 }
 
 static void MapDevices(WebApplication app)
@@ -283,6 +298,21 @@ static void MapDevices(WebApplication app)
         var device = await db.WalletDevices.SingleAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
         device.IsActive = request.Enabled;
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, request.Enabled ? "DeviceActivated" : "DeviceDeactivated", nameof(WalletDevice), id.ToString()));
+        await db.SaveChangesAsync();
+        return Results.NoContent();
+    }).RequireAuthorization();
+    devices.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var device = await db.WalletDevices.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (device is null) return Results.NotFound();
+        if (await db.WalletReceipts.AnyAsync(x => x.DeviceId == id))
+            return Results.Conflict(new { error = "This device has received-money history and cannot be deleted. Deactivate it instead to preserve your records." });
+        var attachedWallets = await db.Wallets.Where(x => x.DeviceId == id).ToListAsync();
+        foreach (var wallet in attachedWallets) wallet.DeviceId = null;
+        db.WalletDevices.Remove(device);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "DeviceDeleted", nameof(WalletDevice), device.Id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();
     }).RequireAuthorization();

@@ -1,4 +1,195 @@
 "use client";
-import { FormEvent, useState } from "react";import { useMutation,useQuery,useQueryClient } from "@tanstack/react-query";import { Copy,Plus,Smartphone,Wifi,WifiOff,X } from "lucide-react";import { Shell } from "@/components/shell";import { api } from "@/lib/api";
-type Device={id:string;name:string;platform:string;isActive:boolean;pairedAtUtc?:string;lastSeenAtUtc?:string;walletCount:number};type Pairing={id:string;pairingCode:string;expiresAtUtc:string};
-export default function DevicesPage(){const client=useQueryClient();const [open,setOpen]=useState(false);const [pairing,setPairing]=useState<Pairing>();const devices=useQuery({queryKey:["devices"],queryFn:()=>api<Device[]>("/api/devices"),refetchInterval:20_000});const create=useMutation({mutationFn:(name:string)=>api<Pairing>("/api/devices/pairing",{method:"POST",body:JSON.stringify({name})}),onSuccess:p=>{setPairing(p);client.invalidateQueries({queryKey:["devices"]})}});function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();create.mutate(String(new FormData(e.currentTarget).get("name")))}return <Shell><div className="page-head"><div><span className="eyebrow">Capture network</span><h1>Devices</h1><p>Pair operational Android phones and monitor whether they are actively reaching Wallets Hub.</p></div><button className="btn" onClick={()=>{setPairing(undefined);setOpen(true)}}><Plus size={18}/>Pair device</button></div><div className="grid">{(devices.data??[]).map(d=>{const online=d.lastSeenAtUtc&&devices.dataUpdatedAt-new Date(d.lastSeenAtUtc).getTime()<15*60*1000;return <article className="card" key={d.id}><div className="card-top"><div className="card-icon"><Smartphone/></div><span className={`badge ${online?"success":"danger"}`}>{online?<><Wifi size={12}/>Online</>:<><WifiOff size={12}/>Offline</>}</span></div><h2>{d.name}</h2><p>{d.platform} · {d.walletCount} wallet{d.walletCount===1?"":"s"}</p><p>Paired: {d.pairedAtUtc?new Date(d.pairedAtUtc).toLocaleString():"Waiting for pairing"}</p><p>Last seen: {d.lastSeenAtUtc?new Date(d.lastSeenAtUtc).toLocaleString():"Never"}</p></article>})}</div>{open&&<div className="modal-backdrop"><div className="modal"><div className="modal-head"><h2>Pair Android device</h2><button className="icon-button" onClick={()=>setOpen(false)}><X/></button></div>{!pairing?<form onSubmit={submit}><label>Device name<input required name="name" placeholder="Branch 1 · Samsung A55"/></label><p className="muted">A secure six-digit code will be valid for ten minutes.</p><button className="btn" disabled={create.isPending}>Generate pairing code</button></form>:<div style={{textAlign:"center",padding:"20px"}}><span className="eyebrow">Enter this code in the Wallets Hub Android app</span><div style={{fontSize:"3rem",fontWeight:700,letterSpacing:".18em",margin:"18px 0"}}>{pairing.pairingCode}</div><p className="muted">Expires {new Date(pairing.expiresAtUtc).toLocaleTimeString()}</p><button className="btn btn-secondary" onClick={()=>navigator.clipboard.writeText(pairing.pairingCode)}><Copy size={17}/>Copy code</button></div>}</div></div>}</Shell>}
+import { FormEvent, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Copy, Plus, Smartphone, Trash2, Wifi, WifiOff, X } from "lucide-react";
+import { Shell } from "@/components/shell";
+import { api } from "@/lib/api";
+type Device = {
+  id: string;
+  name: string;
+  platform: string;
+  isActive: boolean;
+  pairedAtUtc?: string;
+  lastSeenAtUtc?: string;
+  walletCount: number;
+};
+type Pairing = { id: string; pairingCode: string; expiresAtUtc: string };
+export default function DevicesPage() {
+  const client = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [pairing, setPairing] = useState<Pairing>();
+  const devices = useQuery({
+    queryKey: ["devices"],
+    queryFn: () => api<Device[]>("/api/devices"),
+    refetchInterval: 20_000,
+  });
+  const create = useMutation({
+    mutationFn: (name: string) =>
+      api<Pairing>("/api/devices/pairing", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (p) => {
+      setPairing(p);
+      client.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/api/devices/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["devices"] });
+      client.invalidateQueries({ queryKey: ["wallets"] });
+    },
+  });
+  function deleteDevice(device: Device) {
+    if (
+      window.confirm(
+        `Delete “${device.name}”? Assigned wallets will become unassigned. Devices with received-money history are protected.`,
+      )
+    )
+      remove.mutate(device.id);
+  }
+  function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    create.mutate(String(new FormData(e.currentTarget).get("name")));
+  }
+  return (
+    <Shell>
+      <div className="page-head">
+        <div>
+          <span className="eyebrow">Capture network</span>
+          <h1>Devices</h1>
+          <p>
+            Pair operational Android phones and monitor whether they are
+            actively reaching Wallets Hub.
+          </p>
+        </div>
+        <button
+          className="btn"
+          onClick={() => {
+            setPairing(undefined);
+            setOpen(true);
+          }}
+        >
+          <Plus size={18} />
+          Pair device
+        </button>
+      </div>
+      {remove.error && <div className="error">{remove.error.message}</div>}
+      <div className="grid">
+        {(devices.data ?? []).map((d) => {
+          const online =
+            d.lastSeenAtUtc &&
+            devices.dataUpdatedAt - new Date(d.lastSeenAtUtc).getTime() <
+              15 * 60 * 1000;
+          return (
+            <article className="card" key={d.id}>
+              <div className="card-top">
+                <div className="card-icon">
+                  <Smartphone />
+                </div>
+                <span className={`badge ${online ? "success" : "danger"}`}>
+                  {online ? (
+                    <>
+                      <Wifi size={12} />
+                      Online
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff size={12} />
+                      Offline
+                    </>
+                  )}
+                </span>
+              </div>
+              <h2>{d.name}</h2>
+              <p>
+                {d.platform} · {d.walletCount} wallet
+                {d.walletCount === 1 ? "" : "s"}
+              </p>
+              <p>
+                Paired:{" "}
+                {d.pairedAtUtc
+                  ? new Date(d.pairedAtUtc).toLocaleString()
+                  : "Waiting for pairing"}
+              </p>
+              <p>
+                Last seen:{" "}
+                {d.lastSeenAtUtc
+                  ? new Date(d.lastSeenAtUtc).toLocaleString()
+                  : "Never"}
+              </p>
+              <button
+                className="btn btn-danger btn-small"
+                style={{ marginTop: 14 }}
+                disabled={remove.isPending}
+                onClick={() => deleteDevice(d)}
+              >
+                <Trash2 size={15} />
+                Delete device
+              </button>
+            </article>
+          );
+        })}
+      </div>
+      {open && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-head">
+              <h2>Pair Android device</h2>
+              <button className="icon-button" onClick={() => setOpen(false)}>
+                <X />
+              </button>
+            </div>
+            {!pairing ? (
+              <form onSubmit={submit}>
+                <label>
+                  Device name
+                  <input
+                    required
+                    name="name"
+                    placeholder="Branch 1 · Samsung A55"
+                  />
+                </label>
+                <p className="muted">
+                  A secure six-digit code will be valid for ten minutes.
+                </p>
+                <button className="btn" disabled={create.isPending}>
+                  Generate pairing code
+                </button>
+              </form>
+            ) : (
+              <div style={{ textAlign: "center", padding: "20px" }}>
+                <span className="eyebrow">
+                  Enter this code in the Wallets Hub Android app
+                </span>
+                <div
+                  style={{
+                    fontSize: "3rem",
+                    fontWeight: 700,
+                    letterSpacing: ".18em",
+                    margin: "18px 0",
+                  }}
+                >
+                  {pairing.pairingCode}
+                </div>
+                <p className="muted">
+                  Expires {new Date(pairing.expiresAtUtc).toLocaleTimeString()}
+                </p>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() =>
+                    navigator.clipboard.writeText(pairing.pairingCode)
+                  }
+                >
+                  <Copy size={17} />
+                  Copy code
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </Shell>
+  );
+}
