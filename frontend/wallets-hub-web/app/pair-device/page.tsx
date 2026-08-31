@@ -19,6 +19,7 @@ export default function PairDevicePage() {
   const [status, setStatus] = useState<CaptureStatus>();
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [smsResult, setSmsResult] = useState("");
   const [busy, setBusy] = useState(false);
   const refresh = () =>
     WalletCapture.getStatus()
@@ -44,6 +45,35 @@ export default function PairDevicePage() {
         deviceId: result.deviceId,
         deviceToken: result.deviceToken,
       });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function enableSms() {
+    setBusy(true);
+    setError("");
+    try {
+      const permission = await WalletCapture.requestPermissions({ permissions: ["sms"] });
+      if (permission.sms !== "granted") throw new Error("SMS access was not allowed. Please enable it in App settings.");
+      const result = await WalletCapture.scanRecentSms();
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash receipt(s).`);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function scanSms() {
+    setBusy(true);
+    setError("");
+    setSmsResult("");
+    try {
+      const result = await WalletCapture.scanRecentSms();
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash receipt(s).`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -135,6 +165,7 @@ export default function PairDevicePage() {
                 label="Notification permission"
                 ok={status.notificationAccess}
               />
+              <StatusRow label="SMS permission (Vodafone Cash)" ok={status.smsAccess} />
               <StatusRow
                 label="Listener connected"
                 ok={Boolean(status.listenerConnectedAt)}
@@ -146,11 +177,33 @@ export default function PairDevicePage() {
                 value={time(status.lastNotificationAt)}
               />
               <StatusRow
+                label="Last SMS checked"
+                ok={Boolean(status.lastSmsAt)}
+                value={time(status.lastSmsAt)}
+              />
+              <StatusRow
                 label="Last wallet match"
                 ok={Boolean(status.lastWalletMatchAt)}
                 value={time(status.lastWalletMatchAt)}
               />
             </div>
+            {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
+            {smsResult && <div className="notice" style={{ marginTop: 12 }}>{smsResult}</div>}
+            {!status.smsAccess && (
+              <div className="button-row" style={{ marginTop: 12 }}>
+                <button className="btn" disabled={busy} onClick={enableSms}>
+                  Allow SMS access
+                </button>
+                <button className="btn btn-secondary" onClick={() => WalletCapture.openAppSettings()}>
+                  App settings
+                </button>
+              </div>
+            )}
+            {status.smsAccess && (
+              <button className="btn btn-secondary btn-wide" style={{ marginTop: 12 }} disabled={busy} onClick={scanSms}>
+                Scan SMS from the last 2 days
+              </button>
+            )}
             {!status.notificationAccess && (
               <>
                 <div className="notice" style={{ marginTop: 14 }}>
@@ -183,7 +236,7 @@ export default function PairDevicePage() {
               Refresh status
             </button>
             <p className="muted" style={{ textAlign: "center" }}>
-              <ShieldCheck size={15} /> Only matching incoming-payment
+              <ShieldCheck size={15} /> Only matching incoming-payment SMS or
               notifications are uploaded.
             </p>
           </div>
