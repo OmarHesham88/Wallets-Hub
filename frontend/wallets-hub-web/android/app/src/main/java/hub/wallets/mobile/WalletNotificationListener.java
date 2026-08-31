@@ -37,7 +37,7 @@ public class WalletNotificationListener extends NotificationListenerService {
         Parcelable[] bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES);
         if (bundles != null) for (Notification.MessagingStyle.Message message : Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)) append(body, message.getText());
         String title = text(extras.getCharSequence(Notification.EXTRA_TITLE)); String content = (title + " " + body + " " + notification.getPackageName()).toLowerCase(Locale.ROOT);
-        boolean provider = any(content, "vodafone cash", "vf cash", "فودافون كاش", "vf.eg/vfcash", "orange cash", "اورنج كاش", "اورنچ كاش", "etisalat cash", "اتصالات كاش", "e& cash", "we pay", "wepay", "وي باي", "instapay", "انستاباي", "bank transfer", "account credited");
+        boolean provider = any(content, "vodafone cash", "vf cash", "فودافون كاش", "vf.eg/vfcash", "orange cash", "اورنج كاش", "اورنچ كاش", "etisalat cash", "اتصالات كاش", "e& cash", "we pay", "wepay", "وي باي", "instapay", "انستاباي", "bank transfer", "account credited") || isVodafoneCashReceipt(content);
         boolean incoming = any(content, "received", "money received", "credited", "تم استلام", "استلمت", "تم إيداع", "تم ايداع", "تم إضافة", "تم اضافة", "حوالة واردة", "تحويل وارد");
         if (!provider || !incoming) return;
         WalletCapturePlugin.prefs(this).edit().putLong(WalletCapturePlugin.LAST_WALLET_MATCH_AT, System.currentTimeMillis()).apply();
@@ -47,6 +47,7 @@ public class WalletNotificationListener extends NotificationListenerService {
         OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).build();
         WorkManager.getInstance(this).enqueueUniqueWork("wallet-" + fingerprint, ExistingWorkPolicy.KEEP, work);
     }
+    private static boolean isVodafoneCashReceipt(String value) { return value.contains("تم استلام مبلغ") && value.contains("من رقم") && value.contains("محفظتك") && value.contains("رقم العملية"); }
     private static boolean any(String value, String... markers) { for (String marker : markers) if (value.contains(marker)) return true; return false; }
     private static void append(StringBuilder builder, CharSequence value) { String next = text(value).trim(); if (next.isEmpty()) return; if (builder.length() > 0) builder.append('\n'); builder.append(next); }
     private static String text(CharSequence value) { return value == null ? "" : value.toString(); }

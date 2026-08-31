@@ -34,6 +34,11 @@ public static partial class WalletMessageParser
         var normalized = text.ToLowerInvariant();
         var package = (sourcePackage ?? "").ToLowerInvariant();
         var provider = Providers.FirstOrDefault(rule => rule.Markers.Any(marker => normalized.Contains(marker) || package.Contains(marker.Replace(" ", ""))));
+        // Some SMS applications omit the sender/title and the vf.eg link from the
+        // notification payload. The receipt body still has a stable Vodafone Cash
+        // structure, so recognize that structure without depending on the title.
+        if (provider is null && IsVodafoneCashReceipt(normalized))
+            provider = Providers[0];
         if (provider is null) return false;
 
         var incoming = new[] { "received", "money received", "credited", "تم استلام", "استلمت", "تم تحويل مبلغ", "تم إيداع", "تم ايداع", "تم إضافة", "تم اضافة", "حوالة واردة", "تحويل وارد", "من رقم", " from " }.Any(normalized.Contains);
@@ -59,4 +64,10 @@ public static partial class WalletMessageParser
     private static string NormalizeDigits(string value) => value
         .Replace('٠', '0').Replace('١', '1').Replace('٢', '2').Replace('٣', '3').Replace('٤', '4')
         .Replace('٥', '5').Replace('٦', '6').Replace('٧', '7').Replace('٨', '8').Replace('٩', '9');
+
+    private static bool IsVodafoneCashReceipt(string value) =>
+        value.Contains("تم استلام مبلغ")
+        && value.Contains("من رقم")
+        && value.Contains("محفظتك")
+        && value.Contains("رقم العملية");
 }

@@ -30,6 +30,18 @@ public sealed class WalletMessageParserTests
         Assert.Equal("022496121035", parsed.Reference);
     }
 
+    [Fact]
+    public void Parses_vodafone_receipt_when_android_omits_sender_title_and_link()
+    {
+        const string message = "تم استلام مبلغ 10 جنيه من رقم 01023719913 المسجل باسم Nadia H Abdelwahab على رقم محفظتك 01023684687. رصيدك الحالي: 73173.82 جنيه تاريخ العملية: 31-08-26 18:41 رقم العملية: 023227566038";
+        Assert.True(WalletMessageParser.TryParse("com.samsung.android.messaging", message, out var parsed));
+        Assert.Equal("Vodafone Cash", parsed.Provider);
+        Assert.Equal(10m, parsed.Amount);
+        Assert.Equal("01023719913", parsed.Sender);
+        Assert.Equal("01023684687", parsed.Destination);
+        Assert.Equal("023227566038", parsed.Reference);
+    }
+
     [Theory]
     [InlineData("Vodafone Cash: You sent 100 EGP to 01012345678")]
     [InlineData("Your verification code is 778899")]
