@@ -44,7 +44,7 @@ export default function DevicesPage() {
   function deleteDevice(device: Device) {
     if (
       window.confirm(
-        `Delete “${device.name}”? Assigned wallets will become unassigned. Devices with received-money history are protected.`,
+        `Delete “${device.name}”? Assigned wallets will become unassigned, while historical payment records remain preserved.`,
       )
     )
       remove.mutate(device.id);

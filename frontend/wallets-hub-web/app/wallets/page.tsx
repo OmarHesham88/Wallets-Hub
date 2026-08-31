@@ -49,7 +49,7 @@ export default function WalletsPage() {
   function deleteWallet(wallet: Wallet) {
     if (
       window.confirm(
-        `Delete “${wallet.name}”? This cannot be undone. Wallets with received-money history are protected.`,
+        `Delete “${wallet.name}”? It will disappear from management, while any historical payment records remain preserved in reports.`,
       )
     )
       remove.mutate(wallet.id);
