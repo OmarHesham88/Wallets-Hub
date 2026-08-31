@@ -38,8 +38,7 @@ public class WalletNotificationListener extends NotificationListenerService {
         if (bundles != null) for (Notification.MessagingStyle.Message message : Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)) append(body, message.getText());
         String title = text(extras.getCharSequence(Notification.EXTRA_TITLE)); String content = (title + " " + body + " " + notification.getPackageName()).toLowerCase(Locale.ROOT);
         boolean binance = content.contains("binance");
-        boolean incomingUsdt = content.contains("usdt") && any(content, "you have received a payment", "payment received", "received a payment");
-        if (!binance || !incomingUsdt) return;
+        if (!binance || !content.contains("usdt")) return;
         WalletCapturePlugin.prefs(this).edit().putLong(WalletCapturePlugin.LAST_WALLET_MATCH_AT, System.currentTimeMillis()).apply();
         String fingerprint = sha256(notification.getPackageName() + "|" + notification.getPostTime() + "|" + notification.getKey() + "|" + title + "|" + body);
         Data input = new Data.Builder().putString("sourcePackage", notification.getPackageName()).putString("title", title).putString("body", body.toString()).putString("receivedAtUtc", utc(notification.getPostTime())).putString("fingerprint", fingerprint).build();
@@ -47,7 +46,6 @@ public class WalletNotificationListener extends NotificationListenerService {
         OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).build();
         WorkManager.getInstance(this).enqueueUniqueWork("wallet-" + fingerprint, ExistingWorkPolicy.KEEP, work);
     }
-    private static boolean any(String value, String... markers) { for (String marker : markers) if (value.contains(marker)) return true; return false; }
     private static void append(StringBuilder builder, CharSequence value) { String next = text(value).trim(); if (next.isEmpty()) return; if (builder.length() > 0) builder.append('\n'); builder.append(next); }
     private static String text(CharSequence value) { return value == null ? "" : value.toString(); }
     private static String utc(long time) { SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT); format.setTimeZone(TimeZone.getTimeZone("UTC")); return format.format(new Date(time)); }

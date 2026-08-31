@@ -51,7 +51,7 @@ dotnet run --project src/WalletsHub.Api -- --seed
 4. The phone never stores an employee password or web session.
 5. The phone filters payment events locally and uploads only matching receipts through `/api/captures`.
 
-Capture sources are intentionally separated: Vodafone Cash and InstaPay are read only from SMS, while Binance USDT receipts are read only from Binance notifications. The pairing screen requests both Android permissions and can scan SMS from the previous two days.
+Capture sources are intentionally separated: Vodafone Cash and InstaPay are read only from SMS, while Binance USDT receipts are read only from Binance notifications. Android performs a broad provider/channel gate and the server performs detailed receipt parsing, allowing most future message-format updates without another APK install. The pairing screen requests both Android permissions and can scan SMS from the previous two days.
 
 ## Provider engine
 
