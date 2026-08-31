@@ -59,6 +59,8 @@ The provider engine recognizes Arabic and English payment formats, normalizes Ar
 
 New provider variations must be added with regression samples in `WalletMessageParserTests.cs` before release.
 
+Wallet account numbers are unique per provider inside each organization. The same phone number can therefore be registered separately for Vodafone Cash and InstaPay, while duplicate wallets for the same provider and number are rejected.
+
 ## Production
 
 Copy `.env.production.example` to the deployment directory as `.env.production` and replace every secret. The production application is served at `https://servicehub.ink/wallets/`. The compose file connects only the web container to the existing `servicehub_default` reverse-proxy network while keeping its database and API isolated.
@@ -83,4 +85,6 @@ Codex maintains and commits the standalone repository locally. From a normal Win
 
 The launcher uses a process-only PowerShell execution-policy bypass; it does not weaken the system or user policy. The script verifies the repository, configures the exact Git safe-directory entry when necessary, pushes `main`, prints the permanent APK link, and opens the Actions page. It refuses to publish uncommitted files so partially prepared changes cannot be uploaded accidentally.
 
-Subscription billing is intentionally deferred. Organization and owner lifecycle management are already separated so limits and billing can be added without redesigning tenant data.
+Subscription billing is intentionally deferred. Organization and owner lifecycle management are already
+
+separated so limits and billing can be added without redesigning tenant data.

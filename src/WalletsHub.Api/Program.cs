@@ -80,6 +80,9 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
     await db.Database.ExecuteSqlRawAsync("""
         ALTER TABLE "Wallets" ALTER COLUMN "CurrencyCode" TYPE character varying(4);
         ALTER TABLE "WalletReceipts" ALTER COLUMN "CurrencyCode" TYPE character varying(4);
+        DROP INDEX IF EXISTS "IX_Wallets_OrganizationId_NormalizedAccountNumber";
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_Wallets_OrganizationId_Provider_NormalizedAccountNumber"
+            ON "Wallets" ("OrganizationId", "Provider", "NormalizedAccountNumber");
         """);
     return;
 }
@@ -230,8 +233,11 @@ static void MapWallets(WebApplication app)
         var currency = NormalizeCurrency(request.CurrencyCode);
         var provider = request.Provider.Trim();
         ValidateProviderCurrency(provider, currency);
+        var normalizedAccount = NormalizeAccount(request.AccountNumber);
+        if (await db.Wallets.AnyAsync(x => x.OrganizationId == user.OrganizationId && x.Provider == provider && x.NormalizedAccountNumber == normalizedAccount))
+            return Results.BadRequest(new { error = "This account number already exists for the selected provider." });
         if (request.DeviceId.HasValue && !await db.WalletDevices.AnyAsync(x => x.Id == request.DeviceId && x.OrganizationId == user.OrganizationId)) return Results.BadRequest(new { error = "Invalid device." });
-        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = provider, AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = NormalizeAccount(request.AccountNumber), CurrencyCode = currency, DeviceId = request.DeviceId };
+        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = provider, AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = normalizedAccount, CurrencyCode = currency, DeviceId = request.DeviceId };
         db.Wallets.Add(wallet);
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletCreated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
@@ -243,8 +249,11 @@ static void MapWallets(WebApplication app)
         if (!IsOrganizationAdmin(principal)) return Results.Forbid();
         var wallet = await db.Wallets.SingleAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
         var currency = NormalizeCurrency(request.CurrencyCode); var provider = request.Provider.Trim(); ValidateProviderCurrency(provider, currency);
+        var normalizedAccount = NormalizeAccount(request.AccountNumber);
+        if (await db.Wallets.AnyAsync(x => x.Id != id && x.OrganizationId == user.OrganizationId && x.Provider == provider && x.NormalizedAccountNumber == normalizedAccount))
+            return Results.BadRequest(new { error = "This account number already exists for the selected provider." });
         wallet.Name = request.Name.Trim(); wallet.Provider = provider; wallet.AccountNumber = request.AccountNumber.Trim();
-        wallet.NormalizedAccountNumber = NormalizeAccount(request.AccountNumber); wallet.CurrencyCode = currency; wallet.DeviceId = request.DeviceId; wallet.IsActive = request.IsActive;
+        wallet.NormalizedAccountNumber = normalizedAccount; wallet.CurrencyCode = currency; wallet.DeviceId = request.DeviceId; wallet.IsActive = request.IsActive;
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletUpdated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();

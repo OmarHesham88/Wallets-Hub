@@ -36,7 +36,7 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
             e.Property(x => x.AccountNumber).HasMaxLength(120);
             e.Property(x => x.NormalizedAccountNumber).HasMaxLength(120);
             e.Property(x => x.CurrencyCode).HasMaxLength(4);
-            e.HasIndex(x => new { x.OrganizationId, x.NormalizedAccountNumber }).IsUnique();
+            e.HasIndex(x => new { x.OrganizationId, x.Provider, x.NormalizedAccountNumber }).IsUnique();
             e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<WalletDevice>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
         });
