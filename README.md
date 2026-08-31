@@ -69,6 +69,10 @@ Every push to `main` independently runs **Publish Android release** and creates 
 
 `https://github.com/OmarHesham88/Wallets-Hub/releases/download/android-latest/wallets-hub.apk`
 
+Mobile-friendly direct download with resume support:
+
+`https://servicehub.ink/downloads/wallets-hub.apk`
+
 ## Publishing without a connected GitHub plugin
 
 Codex maintains and commits the standalone repository locally. From a normal Windows PowerShell session, publish the prepared commit with one command:

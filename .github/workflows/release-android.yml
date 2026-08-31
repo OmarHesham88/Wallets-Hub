@@ -55,6 +55,23 @@ jobs:
       - name: Verify APK signature
         run: |
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs wallets-hub.apk
+      - name: Configure deployment SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/walletshub_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/walletshub_deploy" "$HOME/.ssh/known_hosts"
+      - name: Refresh direct APK download
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          scp -i "$HOME/.ssh/walletshub_deploy" wallets-hub.apk "$DEPLOY_USER@$DEPLOY_HOST:/tmp/wallets-hub.apk.new"
+          ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d /opt/servicehub/walletshub-downloads && mv /tmp/wallets-hub.apk.new /opt/servicehub/walletshub-downloads/wallets-hub.apk"
       - name: Replace current Android release
         env:
           GH_TOKEN: ${{ github.token }}
