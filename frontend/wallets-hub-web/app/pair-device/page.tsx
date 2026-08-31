@@ -1,8 +1,8 @@
 "use client";
 import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
-import { CheckCircle2, RefreshCw, ShieldCheck, Smartphone } from "lucide-react";
-import { api, appPath } from "@/lib/api";
+import { ArrowRight, CheckCircle2, LayoutDashboard, LogIn, RefreshCw, ShieldCheck, Smartphone } from "lucide-react";
+import { api, appPath, User } from "@/lib/api";
 import { CaptureStatus, isNative, WalletCapture } from "@/lib/wallet-native";
 type PairResponse = {
   deviceId: string;
@@ -21,12 +21,20 @@ export default function PairDevicePage() {
   const [error, setError] = useState("");
   const [smsResult, setSmsResult] = useState("");
   const [busy, setBusy] = useState(false);
+  const [accountDestination, setAccountDestination] = useState("/login");
   const refresh = () =>
     WalletCapture.getStatus()
       .then(setStatus)
       .catch(() => setStatus(undefined));
   useEffect(() => {
-    if (isNative()) void refresh();
+    if (!isNative()) return;
+    void refresh();
+    fetch(appPath("/api/auth/me"), { credentials: "include" })
+      .then(async (response) => response.ok ? response.json() as Promise<User> : undefined)
+      .then((user) => {
+        if (user) setAccountDestination(user.role === "PlatformAdmin" ? "/platform" : "/dashboard");
+      })
+      .catch(() => undefined);
   }, []);
   async function pair(e: FormEvent) {
     e.preventDefault();
@@ -115,6 +123,21 @@ export default function PairDevicePage() {
           <div>
             <strong>Wallets Hub</strong>
             <span>Secure capture device</span>
+          </div>
+        </div>
+        <div className="notice" style={{ marginTop: 24 }}>
+          <div className="card-top" style={{ gap: 14 }}>
+            <div>
+              <strong>{accountDestination === "/login" ? "Manage your Wallets Hub" : "Your management account"}</strong>
+              <p className="muted" style={{ margin: "4px 0 0" }}>
+                {accountDestination === "/login" ? "Sign in to access wallets, employees, payments, and reports." : "Open the complete dashboard, reports, wallets, and team controls."}
+              </p>
+            </div>
+            <a className="btn btn-small" href={appPath(accountDestination)}>
+              {accountDestination === "/login" ? <LogIn size={16}/> : <LayoutDashboard size={16}/>}
+              {accountDestination === "/login" ? "Sign in" : "Dashboard"}
+              <ArrowRight size={15}/>
+            </a>
           </div>
         </div>
         {!status?.paired ? (

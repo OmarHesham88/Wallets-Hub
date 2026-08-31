@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api, appPath, User } from "@/lib/api";
+import { useIsNative } from "@/lib/wallet-native";
 
 const organizationLinks = [
   ["/dashboard", "Overview", LayoutDashboard],
@@ -36,11 +37,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
+  const native = useIsNative();
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api<User>("/api/auth/me"),
   });
-  const links =
+  const accountLinks =
     me.data?.role === "PlatformAdmin"
       ? [["/platform", "Client organizations", Building2] as const]
       : organizationLinks.filter(([href]) => {
@@ -64,6 +66,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             );
           return true;
         });
+  const links = native
+    ? [...accountLinks, ["/pair-device", "This phone", Smartphone] as const]
+    : accountLinks;
   return (
     <div className="app-shell">
       <aside className={`sidebar ${open ? "open" : ""}`}>
@@ -112,7 +117,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             onClick={async () => {
               await api("/api/auth/logout", { method: "POST" });
               client.clear();
-              router.replace("/login");
+              router.replace(native ? "/pair-device" : "/login");
             }}
           >
             <LogOut size={18} />
@@ -125,6 +130,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <Menu />
           </button>
           <strong>Wallets Hub</strong>
+          {native && <Link className="icon-button" style={{ marginLeft: "auto" }} href="/pair-device" title="This phone capture status"><Smartphone size={19}/></Link>}
         </header>
         <main>{children}</main>
       </section>

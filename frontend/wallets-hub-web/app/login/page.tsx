@@ -2,8 +2,9 @@
 import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CheckCircle2, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, ShieldCheck, Smartphone } from "lucide-react";
 import { api, appPath, User } from "@/lib/api";
+import { useIsNative } from "@/lib/wallet-native";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,6 +12,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const native = useIsNative();
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -69,6 +71,7 @@ export default function LoginPage() {
       </section>
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
+          {native && <a className="btn btn-secondary btn-small" style={{ marginBottom: 24 }} href={appPath("/pair-device")}><ArrowLeft size={15}/><Smartphone size={16}/>This phone</a>}
           <span className="eyebrow">Secure workspace</span>
           <h2>Welcome back</h2>
           <p>

@@ -59,6 +59,8 @@ The provider engine recognizes Arabic and English payment formats, normalizes Ar
 
 Every captured payment is treated as received immediately. There is no manual confirmation or rejection queue: dashboards, reports, and exports include all captured payments directly.
 
+The Android app opens on its device capture and pairing screen, with account sign-in available from the same view. After sign-in, the complete web management experience is available inside the APK, and a native-only **This phone** entry keeps pairing, SMS permission, notification permission, and capture status accessible from the dashboard.
+
 New provider variations must be added with regression samples in `WalletMessageParserTests.cs` before release.
 
 Wallet account numbers are unique per provider inside each organization. The same phone number can therefore be registered separately for Vodafone Cash and InstaPay, while duplicate wallets for the same provider and number are rejected.
