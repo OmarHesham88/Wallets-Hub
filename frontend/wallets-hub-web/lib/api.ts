@@ -17,4 +17,6 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json();
 }
 
-export const money = (amount: number, currency: string) => new Intl.NumberFormat("en-EG", { style: "currency", currency }).format(amount);
+export const money = (amount: number, currency: string) => currency === "USDT"
+  ? `${new Intl.NumberFormat("en-EG", { maximumFractionDigits: 8 }).format(amount)} USDT`
+  : new Intl.NumberFormat("en-EG", { style: "currency", currency }).format(amount);

@@ -49,13 +49,13 @@ dotnet run --project src/WalletsHub.Api -- --seed
 2. Wallets Hub returns a six-digit code valid for ten minutes.
 3. The Android app opens its pairing screen and exchanges the code for a device-only token.
 4. The phone never stores an employee password or web session.
-5. The notification listener filters wallet messages locally and uploads matching receipts through `/api/captures`.
+5. The phone filters payment events locally and uploads only matching receipts through `/api/captures`.
 
-Direct SMS permissions are deliberately not required because current Android versions hard-restrict them for ordinary applications. Notification access is the supported capture path.
+Capture sources are intentionally separated: Vodafone Cash and InstaPay are read only from SMS, while Binance USDT receipts are read only from Binance notifications. The pairing screen requests both Android permissions and can scan SMS from the previous two days.
 
 ## Provider engine
 
-The initial provider adapters recognize Arabic and English variants for Vodafone Cash, Orange Cash, e& Cash, WE Pay, InstaPay, and common bank-credit notifications. The parser normalizes Arabic digits, separates EGP and USD, extracts sender/destination/reference fields, rejects outgoing messages, and preserves the encrypted original message for review.
+The provider engine recognizes Arabic and English payment formats, normalizes Arabic digits, separates EGP, USD, and USDT, extracts sender/destination/reference fields, rejects outgoing messages and wrong capture channels, and preserves the encrypted original message for review. The active production routes are Vodafone Cash and InstaPay through SMS and Binance through notifications.
 
 New provider variations must be added with regression samples in `WalletMessageParserTests.cs` before release.
 

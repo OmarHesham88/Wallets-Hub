@@ -35,7 +35,7 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
             e.Property(x => x.Provider).HasMaxLength(80);
             e.Property(x => x.AccountNumber).HasMaxLength(120);
             e.Property(x => x.NormalizedAccountNumber).HasMaxLength(120);
-            e.Property(x => x.CurrencyCode).HasMaxLength(3);
+            e.Property(x => x.CurrencyCode).HasMaxLength(4);
             e.HasIndex(x => new { x.OrganizationId, x.NormalizedAccountNumber }).IsUnique();
             e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<WalletDevice>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
@@ -59,7 +59,7 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
         b.Entity<WalletReceipt>(e =>
         {
             e.Property(x => x.Amount).HasPrecision(18, 4);
-            e.Property(x => x.CurrencyCode).HasMaxLength(3);
+            e.Property(x => x.CurrencyCode).HasMaxLength(4);
             e.Property(x => x.Provider).HasMaxLength(80);
             e.Property(x => x.ProviderReference).HasMaxLength(160);
             e.Property(x => x.Fingerprint).HasMaxLength(128);

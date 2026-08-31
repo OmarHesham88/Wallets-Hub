@@ -59,7 +59,7 @@ export default function PairDevicePage() {
       const permission = await WalletCapture.requestPermissions({ permissions: ["sms"] });
       if (permission.sms !== "granted") throw new Error("SMS access was not allowed. Please enable it in App settings.");
       const result = await WalletCapture.scanRecentSms();
-      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash receipt(s).`);
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash/InstaPay receipt(s).`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -73,7 +73,7 @@ export default function PairDevicePage() {
     setSmsResult("");
     try {
       const result = await WalletCapture.scanRecentSms();
-      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash receipt(s).`);
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash/InstaPay receipt(s).`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -162,10 +162,10 @@ export default function PairDevicePage() {
             </div>
             <div className="card" style={{ marginTop: 14 }}>
               <StatusRow
-                label="Notification permission"
+                label="Notification permission (Binance)"
                 ok={status.notificationAccess}
               />
-              <StatusRow label="SMS permission (Vodafone Cash)" ok={status.smsAccess} />
+              <StatusRow label="SMS permission (Vodafone + InstaPay)" ok={status.smsAccess} />
               <StatusRow
                 label="Listener connected"
                 ok={Boolean(status.listenerConnectedAt)}

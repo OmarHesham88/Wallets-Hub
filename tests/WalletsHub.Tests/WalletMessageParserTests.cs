@@ -34,12 +34,37 @@ public sealed class WalletMessageParserTests
     public void Parses_vodafone_receipt_when_android_omits_sender_title_and_link()
     {
         const string message = "تم استلام مبلغ 10 جنيه من رقم 01023719913 المسجل باسم Nadia H Abdelwahab على رقم محفظتك 01023684687. رصيدك الحالي: 73173.82 جنيه تاريخ العملية: 31-08-26 18:41 رقم العملية: 023227566038";
-        Assert.True(WalletMessageParser.TryParse("com.samsung.android.messaging", message, out var parsed));
+        Assert.True(WalletMessageParser.TryParse("android.sms", message, out var parsed));
         Assert.Equal("Vodafone Cash", parsed.Provider);
         Assert.Equal(10m, parsed.Amount);
         Assert.Equal("01023719913", parsed.Sender);
         Assert.Equal("01023684687", parsed.Destination);
         Assert.Equal("023227566038", parsed.Reference);
+    }
+
+    [Fact]
+    public void Parses_binance_usdt_notification()
+    {
+        const string message = "Binance You have received a payment You have received a payment of 1 USDT from otify on 2026-08-31 16:10:56(UTC)";
+        Assert.True(WalletMessageParser.TryParse("com.binance.dev", message, out var parsed));
+        Assert.Equal("Binance", parsed.Provider);
+        Assert.Equal(1m, parsed.Amount);
+        Assert.Equal("USDT", parsed.CurrencyCode);
+        Assert.Equal("otify", parsed.Sender);
+    }
+
+    [Theory]
+    [InlineData("com.samsung.android.messaging", "Vodafone Cash: You received EGP 10 from 01012345678")]
+    [InlineData("com.instapay.app", "InstaPay account credited by 20 EGP from 01012345678")]
+    [InlineData("android.sms", "Binance You have received a payment of 1 USDT from otify")]
+    public void Rejects_provider_on_the_wrong_capture_channel(string source, string message) =>
+        Assert.False(WalletMessageParser.TryParse(source, message, out _));
+
+    [Fact]
+    public void Accepts_instapay_from_sms()
+    {
+        Assert.True(WalletMessageParser.TryParse("android.sms", "InstaPay account credited by 950 EGP from 01098765432", out var parsed));
+        Assert.Equal("InstaPay", parsed.Provider);
     }
 
     [Theory]

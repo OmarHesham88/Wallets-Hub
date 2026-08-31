@@ -52,7 +52,7 @@ export default function LoginPage() {
           </h1>
           <p>
             Connect wallet phones, assign employee access, verify receipts, and
-            understand every EGP or USD movement from a clean operational
+            understand every EGP, USD, or USDT movement from a clean operational
             dashboard.
           </p>
           <div className="feature-row">

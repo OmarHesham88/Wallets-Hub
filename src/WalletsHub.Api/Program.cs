@@ -75,7 +75,12 @@ MapNotifications(app);
 if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
-    await scope.ServiceProvider.GetRequiredService<WalletsDbContext>().Database.EnsureCreatedAsync();
+    var db = scope.ServiceProvider.GetRequiredService<WalletsDbContext>();
+    await db.Database.EnsureCreatedAsync();
+    await db.Database.ExecuteSqlRawAsync("""
+        ALTER TABLE "Wallets" ALTER COLUMN "CurrencyCode" TYPE character varying(4);
+        ALTER TABLE "WalletReceipts" ALTER COLUMN "CurrencyCode" TYPE character varying(4);
+        """);
     return;
 }
 if (args.Contains("--seed", StringComparer.OrdinalIgnoreCase))
@@ -223,8 +228,10 @@ static void MapWallets(WebApplication app)
         var user = await RequireOrganizationUser(principal, users);
         if (!IsOrganizationAdmin(principal)) return Results.Forbid();
         var currency = NormalizeCurrency(request.CurrencyCode);
+        var provider = request.Provider.Trim();
+        ValidateProviderCurrency(provider, currency);
         if (request.DeviceId.HasValue && !await db.WalletDevices.AnyAsync(x => x.Id == request.DeviceId && x.OrganizationId == user.OrganizationId)) return Results.BadRequest(new { error = "Invalid device." });
-        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = request.Provider.Trim(), AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = NormalizeAccount(request.AccountNumber), CurrencyCode = currency, DeviceId = request.DeviceId };
+        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = provider, AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = NormalizeAccount(request.AccountNumber), CurrencyCode = currency, DeviceId = request.DeviceId };
         db.Wallets.Add(wallet);
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletCreated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
@@ -235,8 +242,9 @@ static void MapWallets(WebApplication app)
         var user = await RequireOrganizationUser(principal, users);
         if (!IsOrganizationAdmin(principal)) return Results.Forbid();
         var wallet = await db.Wallets.SingleAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
-        wallet.Name = request.Name.Trim(); wallet.Provider = request.Provider.Trim(); wallet.AccountNumber = request.AccountNumber.Trim();
-        wallet.NormalizedAccountNumber = NormalizeAccount(request.AccountNumber); wallet.CurrencyCode = NormalizeCurrency(request.CurrencyCode); wallet.DeviceId = request.DeviceId; wallet.IsActive = request.IsActive;
+        var currency = NormalizeCurrency(request.CurrencyCode); var provider = request.Provider.Trim(); ValidateProviderCurrency(provider, currency);
+        wallet.Name = request.Name.Trim(); wallet.Provider = provider; wallet.AccountNumber = request.AccountNumber.Trim();
+        wallet.NormalizedAccountNumber = NormalizeAccount(request.AccountNumber); wallet.CurrencyCode = currency; wallet.DeviceId = request.DeviceId; wallet.IsActive = request.IsActive;
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletUpdated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();
@@ -356,7 +364,7 @@ static void MapReceipts(WebApplication app)
         }
         if (wallet is null)
         {
-            var providerCandidates = await walletQuery.Where(x => x.Provider == parsed.Provider).Take(2).ToListAsync();
+            var providerCandidates = await walletQuery.Where(x => x.Provider == parsed.Provider && x.CurrencyCode == parsed.CurrencyCode).Take(2).ToListAsync();
             if (providerCandidates.Count == 1) wallet = providerCandidates[0];
         }
         if (wallet is null)
@@ -564,7 +572,13 @@ static object UserResponse(AppUser user, string role, Organization? organization
 static AuditEvent Audit(Guid? organizationId, string? userId, string action, string entityType, string? entityId) => new() { OrganizationId = organizationId, UserId = userId, Action = action, EntityType = entityType, EntityId = entityId };
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 static string NormalizeAccount(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", "USD" => "USD", _ => throw new BadHttpRequestException("Currency must be EGP or USD.") };
+static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", "USD" => "USD", "USDT" => "USDT", _ => throw new BadHttpRequestException("Currency must be EGP, USD, or USDT.") };
+static void ValidateProviderCurrency(string provider, string currency)
+{
+    var binance = provider.Equals("Binance", StringComparison.OrdinalIgnoreCase);
+    if (binance && currency != "USDT") throw new BadHttpRequestException("Binance wallets must use USDT.");
+    if (!binance && currency == "USDT") throw new BadHttpRequestException("USDT is available only for Binance wallets.");
+}
 static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries).Select(part => new string(part.Where(char.IsLetterOrDigit).ToArray())).Where(part => part.Length > 0));
 static string Unprotect(IDataProtector protector, string value) { try { return protector.Unprotect(value); } catch { return "Message unavailable"; } }
 

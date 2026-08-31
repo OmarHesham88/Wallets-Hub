@@ -36,7 +36,9 @@ public class WalletSmsReceiver extends BroadcastReceiver {
         String content = (text(sender) + " " + text(body)).toLowerCase(Locale.ROOT);
         boolean vodafone = any(content, "vodafone cash", "vf cash", "فودافون كاش", "vf.eg/vfcash") ||
             (content.contains("تم استلام مبلغ") && content.contains("من رقم") && content.contains("محفظتك") && content.contains("رقم العملية"));
-        if (!vodafone || !any(content, "received", "money received", "تم استلام", "استلمت")) return false;
+        boolean instapay = any(content, "instapay", "insta pay", "انستاباي", "إنستاباي");
+        boolean incoming = any(content, "received", "money received", "credited", "تم استلام", "استلمت", "تم إيداع", "تم ايداع", "تم إضافة", "تم اضافة", "حوالة واردة", "تحويل وارد");
+        if (!(vodafone || instapay) || !incoming) return false;
         WalletCapturePlugin.prefs(context).edit().putLong(WalletCapturePlugin.LAST_WALLET_MATCH_AT, System.currentTimeMillis()).apply();
         String fingerprint = sha256("android.sms|" + receivedAt + "|" + text(sender) + "|" + text(body));
         Data input = new Data.Builder().putString("sourcePackage", "android.sms").putString("title", text(sender))

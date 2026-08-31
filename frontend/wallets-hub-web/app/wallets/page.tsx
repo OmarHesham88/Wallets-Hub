@@ -17,6 +17,7 @@ type Device = { id: string; name: string };
 export default function WalletsPage() {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [provider, setProvider] = useState("Vodafone Cash");
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api<User>("/api/auth/me"),
@@ -35,6 +36,7 @@ export default function WalletsPage() {
       api("/api/wallets", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => {
       setOpen(false);
+      setProvider("Vodafone Cash");
       client.invalidateQueries({ queryKey: ["wallets"] });
     },
   });
@@ -154,12 +156,17 @@ export default function WalletsPage() {
               </label>
               <label>
                 Provider
-                <select name="provider">
+                <select
+                  name="provider"
+                  value={provider}
+                  onChange={(event) => setProvider(event.target.value)}
+                >
                   <option>Vodafone Cash</option>
                   <option>Orange Cash</option>
                   <option>e&amp; Cash</option>
                   <option>WE Pay</option>
                   <option>InstaPay</option>
+                  <option>Binance</option>
                   <option>Bank transfer</option>
                 </select>
               </label>
@@ -170,8 +177,14 @@ export default function WalletsPage() {
               <label>
                 Currency
                 <select name="currency">
-                  <option>EGP</option>
-                  <option>USD</option>
+                  {provider === "Binance" ? (
+                    <option>USDT</option>
+                  ) : (
+                    <>
+                      <option>EGP</option>
+                      <option>USD</option>
+                    </>
+                  )}
                 </select>
               </label>
               <label className="full">
