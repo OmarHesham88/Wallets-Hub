@@ -44,7 +44,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
   });
   const accountLinks =
     me.data?.role === "PlatformAdmin"
-      ? [["/platform", "Client organizations", Building2] as const]
+      ? [
+          ["/platform", "Client organizations", Building2] as const,
+          ["/platform/account", "Account settings", Settings2] as const,
+        ]
       : organizationLinks.filter(([href]) => {
           if (href === "/team")
             return (

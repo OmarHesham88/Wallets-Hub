@@ -156,6 +156,34 @@ static void MapPlatform(WebApplication app)
         await db.SaveChangesAsync();
         return Results.NoContent();
     });
+    platform.MapPut("/account", async (PlatformAccountUpdateRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, SignInManager<AppUser> signIn, WalletsDbContext db) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        var email = request.Email.Trim();
+        if (string.IsNullOrWhiteSpace(email)) return Results.BadRequest(new { error = "Email is required." });
+        if (!await users.CheckPasswordAsync(user, request.CurrentPassword)) return Results.BadRequest(new { error = "The current password is incorrect." });
+        var existing = await users.FindByEmailAsync(email);
+        if (existing is not null && existing.Id != user.Id) return Results.Conflict(new { error = "That email address is already in use." });
+
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        user.Email = email;
+        user.UserName = email;
+        user.EmailConfirmed = true;
+        var updated = await users.UpdateAsync(user);
+        if (!updated.Succeeded) return Results.BadRequest(new { error = string.Join("; ", updated.Errors.Select(x => x.Description)) });
+        var passwordChanged = !string.IsNullOrWhiteSpace(request.NewPassword);
+        if (passwordChanged)
+        {
+            var password = await users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword!);
+            if (!password.Succeeded) return Results.BadRequest(new { error = string.Join("; ", password.Errors.Select(x => x.Description)) });
+        }
+        db.AuditEvents.Add(Audit(null, user.Id, passwordChanged ? "PlatformCredentialsUpdated" : "PlatformEmailUpdated", nameof(AppUser), user.Id));
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+        await signIn.RefreshSignInAsync(user);
+        return Results.NoContent();
+    });
 }
 
 static void MapTeam(WebApplication app)
@@ -573,6 +601,7 @@ static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvaria
 static string Unprotect(IDataProtector protector, string value) { try { return protector.Unprotect(value); } catch { return "Message unavailable"; } }
 
 public sealed record LoginRequest(string Email, string Password);
+public sealed record PlatformAccountUpdateRequest(string Email, string CurrentPassword, string? NewPassword);
 public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword);
 public sealed record ToggleRequest(bool Enabled);
 public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
