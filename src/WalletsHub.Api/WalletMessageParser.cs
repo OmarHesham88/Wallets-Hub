@@ -27,15 +27,17 @@ public static partial class WalletMessageParser
     private static partial Regex ReferencePattern();
     [GeneratedRegex(@"(?:wallet|محفظتك|الى رقم|إلى رقم|to)\D{0,20}((?:\+?20)?01[0125][0-9]{8})", RegexOptions.IgnoreCase)]
     private static partial Regex DestinationPattern();
-    [GeneratedRegex(@"\bfrom\s+([a-z0-9._-]{2,80})(?:\s+on\b|[.,\r\n]|$)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bfrom\s+([\p{L}\p{M}0-9._'\-]+(?:\s+[\p{L}\p{M}0-9._'\-]+){0,12}?)(?=\s+on\s+\d{4}-\d{1,2}-\d{1,2}\b|[,.\r\n]|$)", RegexOptions.IgnoreCase)]
     private static partial Regex NamedSenderPattern();
+    [GeneratedRegex(@"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]")]
+    private static partial Regex BidiControlPattern();
     [GeneratedRegex(@"\sمن\s+([\p{L}\s.]{2,120}?)\s+رقم\s+مرجع(?:ي)?", RegexOptions.IgnoreCase)]
     private static partial Regex ArabicNamedSenderPattern();
 
     public static bool TryParse(string? sourcePackage, string? message, out ParsedWalletMessage parsed)
     {
         parsed = null!;
-        var text = NormalizeDigits(message ?? "");
+        var text = BidiControlPattern().Replace(NormalizeDigits(message ?? ""), "");
         var normalized = text.ToLowerInvariant();
         var package = (sourcePackage ?? "").ToLowerInvariant();
         var provider = Providers.FirstOrDefault(rule => rule.Markers.Any(marker => normalized.Contains(marker) || package.Contains(marker.Replace(" ", ""))));
