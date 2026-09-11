@@ -21,6 +21,8 @@ public sealed class Organization
     public required string Name { get; set; }
     public required string Slug { get; set; }
     public bool IsActive { get; set; } = true;
+    public string TimeZoneId { get; set; } = "Africa/Cairo";
+    public bool MaskSensitiveMessages { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -36,6 +38,7 @@ public sealed class AppUser : IdentityUser
     public bool CanExportReports { get; set; }
     public bool CanManageDevices { get; set; }
     public bool CanManageTeam { get; set; }
+    public bool AllWalletAccess { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -49,6 +52,8 @@ public sealed class Wallet
     public required string AccountNumber { get; set; }
     public required string NormalizedAccountNumber { get; set; }
     public string CurrencyCode { get; set; } = "EGP";
+    public decimal OpeningBalance { get; set; }
+    public decimal? BalanceLimit { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
@@ -66,6 +71,18 @@ public sealed class WalletDevice
     public bool IsActive { get; set; } = true;
     public DateTime? PairedAtUtc { get; set; }
     public DateTime? LastSeenAtUtc { get; set; }
+    public DateTime? LastHeartbeatAtUtc { get; set; }
+    public DateTime? LastSmsAtUtc { get; set; }
+    public DateTime? LastNotificationAtUtc { get; set; }
+    public DateTime? LastCaptureAtUtc { get; set; }
+    public DateTime? OfflineAlertSentAtUtc { get; set; }
+    public string? AppVersion { get; set; }
+    public string? AndroidVersion { get; set; }
+    public int PendingUploadCount { get; set; }
+    public int FailedUploadCount { get; set; }
+    public bool SmsPermissionGranted { get; set; }
+    public bool NotificationPermissionGranted { get; set; }
+    public bool BatteryOptimizationIgnored { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -94,6 +111,66 @@ public sealed class WalletReceipt
     public string? ReviewedByUserId { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }
     public string? ReviewNote { get; set; }
+}
+
+public sealed class CaptureEvent
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid OrganizationId { get; set; }
+    public Guid DeviceId { get; set; }
+    public Guid? WalletId { get; set; }
+    public Guid? ReceiptId { get; set; }
+    public required string Fingerprint { get; set; }
+    public required string Status { get; set; }
+    public required string Reason { get; set; }
+    public string? Provider { get; set; }
+    public decimal? Amount { get; set; }
+    public string? CurrencyCode { get; set; }
+    public string? Sender { get; set; }
+    public string? Destination { get; set; }
+    public string? ProviderReference { get; set; }
+    public required string SourcePackage { get; set; }
+    public required string ProtectedMessage { get; set; }
+    public DateTime ReceivedAtUtc { get; set; }
+    public DateTime FirstSeenAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
+    public int AttemptCount { get; set; } = 1;
+}
+
+public sealed class WalletLedgerEntry
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid OrganizationId { get; set; }
+    public Guid WalletId { get; set; }
+    public Guid? RelatedWalletId { get; set; }
+    public Guid? CorrelationId { get; set; }
+    public required string Type { get; set; }
+    public decimal Amount { get; set; }
+    public string? Note { get; set; }
+    public string? CreatedByUserId { get; set; }
+    public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class WalletReconciliation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid OrganizationId { get; set; }
+    public Guid WalletId { get; set; }
+    public decimal ExpectedBalance { get; set; }
+    public decimal ActualBalance { get; set; }
+    public decimal Variance { get; set; }
+    public string? Note { get; set; }
+    public required string CreatedByUserId { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class NotificationDispatch
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid OrganizationId { get; set; }
+    public required string DispatchKey { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 public sealed class NotificationPreference

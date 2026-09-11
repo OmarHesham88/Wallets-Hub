@@ -2,9 +2,13 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.RateLimiting;
+using System.Globalization;
 using ClosedXML.Excel;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using WalletsHub.Api;
 
@@ -22,6 +26,7 @@ builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
     options.SignIn.RequireConfirmedEmail = false;
     options.Lockout.MaxFailedAccessAttempts = 7;
 }).AddEntityFrameworkStores<WalletsDbContext>().AddDefaultTokenProviders();
+builder.Services.Configure<SecurityStampValidatorOptions>(options => options.ValidationInterval = TimeSpan.FromMinutes(2));
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.Cookie.Name = builder.Environment.IsDevelopment() ? "WalletsHub.Development" : "__Host-WalletsHub";
@@ -35,6 +40,17 @@ builder.Services.ConfigureApplicationCookie(options =>
 });
 builder.Services.AddDataProtection().SetApplicationName("WalletsHub");
 builder.Services.AddAuthorization(options => options.AddPolicy("PlatformAdmin", policy => policy.RequireRole(Roles.PlatformAdmin)));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
+        ClientIp(context),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
+    options.AddPolicy("pairing", context => RateLimitPartition.GetFixedWindowLimiter(
+        ClientIp(context),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(10), QueueLimit = 0 }));
+});
+builder.Services.AddHostedService<OperationsNotificationWorker>();
 builder.Services.AddHealthChecks();
 builder.Services.AddProblemDetails();
 
@@ -45,11 +61,21 @@ app.Use(async (context, next) =>
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["X-Frame-Options"] = "DENY";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    if (context.Request.Path.StartsWithSegments("/api")) context.Response.Headers["Cache-Control"] = "no-store";
     await next();
 });
 app.UseAuthentication();
+app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
+    if (context.User.Identity?.IsAuthenticated == true && context.User.IsInRole(Roles.PlatformAdmin)
+        && context.Request.Path.StartsWithSegments("/api")
+        && !context.Request.Path.StartsWithSegments("/api/auth")
+        && !context.Request.Path.StartsWithSegments("/api/platform"))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden; return;
+    }
     if (context.User.Identity?.IsAuthenticated == true && !context.User.IsInRole(Roles.PlatformAdmin))
     {
         var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -71,6 +97,8 @@ MapDevices(app);
 MapReceipts(app);
 MapReports(app);
 MapNotifications(app);
+MapAudit(app);
+MapOperations(app);
 
 if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
 {
@@ -84,6 +112,62 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_Wallets_OrganizationId_Provider_NormalizedAccountNumber"
             ON "Wallets" ("OrganizationId", "Provider", "NormalizedAccountNumber");
         UPDATE "WalletReceipts" SET "Status" = 1 WHERE "Status" <> 1;
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "TimeZoneId" character varying(80) NOT NULL DEFAULT 'Africa/Cairo';
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "MaskSensitiveMessages" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "AllWalletAccess" boolean NOT NULL DEFAULT false;
+        UPDATE "AspNetUsers" u SET "AllWalletAccess" = true
+          WHERE u."OrganizationId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "UserWalletAccess" a WHERE a."UserId" = u."Id");
+        ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "OpeningBalance" numeric(18,4) NOT NULL DEFAULT 0;
+        ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "BalanceLimit" numeric(18,4) NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastHeartbeatAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastSmsAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastNotificationAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastCaptureAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "OfflineAlertSentAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "AppVersion" character varying(40) NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "AndroidVersion" character varying(40) NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "PendingUploadCount" integer NOT NULL DEFAULT 0;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "FailedUploadCount" integer NOT NULL DEFAULT 0;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "SmsPermissionGranted" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "NotificationPermissionGranted" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "BatteryOptimizationIgnored" boolean NOT NULL DEFAULT false;
+        CREATE TABLE IF NOT EXISTS "CaptureEvents" (
+            "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
+            "DeviceId" uuid NOT NULL REFERENCES "WalletDevices" ("Id") ON DELETE RESTRICT,
+            "WalletId" uuid NULL REFERENCES "Wallets" ("Id") ON DELETE SET NULL,
+            "ReceiptId" uuid NULL REFERENCES "WalletReceipts" ("Id") ON DELETE SET NULL,
+            "Fingerprint" character varying(128) NOT NULL, "Status" character varying(30) NOT NULL, "Reason" character varying(100) NOT NULL,
+            "Provider" character varying(80) NULL, "Amount" numeric(18,4) NULL, "CurrencyCode" character varying(4) NULL,
+            "Sender" text NULL, "Destination" text NULL, "ProviderReference" character varying(160) NULL,
+            "SourcePackage" character varying(200) NOT NULL, "ProtectedMessage" text NOT NULL, "ReceivedAtUtc" timestamp with time zone NOT NULL,
+            "FirstSeenAtUtc" timestamp with time zone NOT NULL, "LastSeenAtUtc" timestamp with time zone NOT NULL, "AttemptCount" integer NOT NULL DEFAULT 1
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_CaptureEvents_DeviceId_Fingerprint" ON "CaptureEvents" ("DeviceId", "Fingerprint");
+        CREATE INDEX IF NOT EXISTS "IX_CaptureEvents_OrganizationId_Status_LastSeenAtUtc" ON "CaptureEvents" ("OrganizationId", "Status", "LastSeenAtUtc");
+        CREATE INDEX IF NOT EXISTS "IX_CaptureEvents_OrganizationId_Reason_LastSeenAtUtc" ON "CaptureEvents" ("OrganizationId", "Reason", "LastSeenAtUtc");
+        CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_WalletId_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "WalletId", "ReceivedAtUtc");
+        CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_DeviceId_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "DeviceId", "ReceivedAtUtc");
+        CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_CurrencyCode_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "CurrencyCode", "ReceivedAtUtc");
+        CREATE TABLE IF NOT EXISTS "WalletLedgerEntries" (
+            "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
+            "WalletId" uuid NOT NULL REFERENCES "Wallets" ("Id") ON DELETE RESTRICT,
+            "RelatedWalletId" uuid NULL REFERENCES "Wallets" ("Id") ON DELETE RESTRICT, "CorrelationId" uuid NULL,
+            "Type" character varying(30) NOT NULL, "Amount" numeric(18,4) NOT NULL, "Note" character varying(500) NULL,
+            "CreatedByUserId" text NULL, "OccurredAtUtc" timestamp with time zone NOT NULL, "CreatedAtUtc" timestamp with time zone NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS "IX_WalletLedgerEntries_OrganizationId_WalletId_OccurredAtUtc" ON "WalletLedgerEntries" ("OrganizationId", "WalletId", "OccurredAtUtc");
+        CREATE TABLE IF NOT EXISTS "WalletReconciliations" (
+            "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
+            "WalletId" uuid NOT NULL, "ExpectedBalance" numeric(18,4) NOT NULL, "ActualBalance" numeric(18,4) NOT NULL,
+            "Variance" numeric(18,4) NOT NULL, "Note" character varying(500) NULL, "CreatedByUserId" text NOT NULL,
+            "CreatedAtUtc" timestamp with time zone NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS "IX_WalletReconciliations_OrganizationId_WalletId_CreatedAtUtc" ON "WalletReconciliations" ("OrganizationId", "WalletId", "CreatedAtUtc");
+        CREATE TABLE IF NOT EXISTS "NotificationDispatches" (
+            "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL, "DispatchKey" character varying(180) NOT NULL,
+            "CreatedAtUtc" timestamp with time zone NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_NotificationDispatches_DispatchKey" ON "NotificationDispatches" ("DispatchKey");
         """);
     return;
 }
@@ -104,11 +188,20 @@ static void MapAuth(WebApplication app)
         if (user.OrganizationId.HasValue && !await db.Organizations.AnyAsync(x => x.Id == user.OrganizationId && x.IsActive))
             return Results.Problem(statusCode: 403, title: "This client workspace is suspended");
         var result = await signIn.PasswordSignInAsync(user, request.Password, isPersistent: true, lockoutOnFailure: true);
+        if (result.RequiresTwoFactor)
+        {
+            if (string.IsNullOrWhiteSpace(request.TwoFactorCode))
+                return Results.Json(new { requiresTwoFactor = true }, statusCode: StatusCodes.Status409Conflict);
+            var code = request.TwoFactorCode.Replace(" ", "").Replace("-", "");
+            result = code.Length == 6
+                ? await signIn.TwoFactorAuthenticatorSignInAsync(code, isPersistent: true, rememberClient: false)
+                : await signIn.TwoFactorRecoveryCodeSignInAsync(request.TwoFactorCode);
+        }
         if (!result.Succeeded) return Results.Problem(statusCode: 401, title: "Invalid credentials");
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "LoginSucceeded", "Authentication", user.Id));
         await db.SaveChangesAsync();
         return Results.NoContent();
-    });
+    }).RequireRateLimiting("login");
     auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
     auth.MapGet("/me", async (ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -117,6 +210,65 @@ static void MapAuth(WebApplication app)
         var roles = await users.GetRolesAsync(user);
         var organization = user.OrganizationId.HasValue ? await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId) : null;
         return Results.Ok(UserResponse(user, roles.SingleOrDefault() ?? Roles.Employee, organization));
+    }).RequireAuthorization();
+    auth.MapPut("/account", async (AccountUpdateRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, SignInManager<AppUser> signIn, WalletsDbContext db) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        if (!await users.CheckPasswordAsync(user, request.CurrentPassword)) return Results.BadRequest(new { error = "The current password is incorrect." });
+        var email = request.Email.Trim();
+        var displayName = request.DisplayName.Trim();
+        if (email.Length == 0 || displayName.Length == 0) return Results.BadRequest(new { error = "Name and email are required." });
+        var existing = await users.FindByEmailAsync(email);
+        if (existing is not null && existing.Id != user.Id) return Results.Conflict(new { error = "That email address is already in use." });
+        user.Email = email; user.UserName = email; user.DisplayName = displayName; user.EmailConfirmed = true;
+        var updated = await users.UpdateAsync(user);
+        if (!updated.Succeeded) return Results.BadRequest(new { error = string.Join("; ", updated.Errors.Select(x => x.Description)) });
+        if (!string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            var changed = await users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+            if (!changed.Succeeded) return Results.BadRequest(new { error = string.Join("; ", changed.Errors.Select(x => x.Description)) });
+        }
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "AccountUpdated", nameof(AppUser), user.Id, new { Email = email, DisplayName = displayName, PasswordChanged = !string.IsNullOrWhiteSpace(request.NewPassword) }));
+        await db.SaveChangesAsync(); await signIn.RefreshSignInAsync(user); return Results.NoContent();
+    }).RequireAuthorization();
+    auth.MapPost("/mfa/setup", async (ClaimsPrincipal principal, UserManager<AppUser> users) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        await users.ResetAuthenticatorKeyAsync(user);
+        var key = await users.GetAuthenticatorKeyAsync(user);
+        var issuer = Uri.EscapeDataString("Wallets Hub");
+        var account = Uri.EscapeDataString(user.Email ?? user.UserName ?? user.Id);
+        return Results.Ok(new { secretKey = key, authenticatorUri = $"otpauth://totp/{issuer}:{account}?secret={key}&issuer={issuer}&digits=6" });
+    }).RequireAuthorization();
+    auth.MapPost("/mfa/confirm", async (MfaCodeRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        var valid = await users.VerifyTwoFactorTokenAsync(user, users.Options.Tokens.AuthenticatorTokenProvider, request.Code.Replace(" ", "").Replace("-", ""));
+        if (!valid) return Results.BadRequest(new { error = "The authenticator code is invalid." });
+        await users.SetTwoFactorEnabledAsync(user, true);
+        var recoveryCodes = await users.GenerateNewTwoFactorRecoveryCodesAsync(user, 8);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "MfaEnabled", nameof(AppUser), user.Id)); await db.SaveChangesAsync();
+        return Results.Ok(new { recoveryCodes });
+    }).RequireAuthorization();
+    auth.MapPost("/mfa/disable", async (PasswordRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        if (!await users.CheckPasswordAsync(user, request.Password)) return Results.BadRequest(new { error = "The current password is incorrect." });
+        await users.SetTwoFactorEnabledAsync(user, false); await users.ResetAuthenticatorKeyAsync(user);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "MfaDisabled", nameof(AppUser), user.Id)); await db.SaveChangesAsync();
+        return Results.NoContent();
+    }).RequireAuthorization();
+    auth.MapPost("/revoke-other-sessions", async (ClaimsPrincipal principal, UserManager<AppUser> users, SignInManager<AppUser> signIn, WalletsDbContext db) =>
+    {
+        var user = await users.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+        await users.UpdateSecurityStampAsync(user); await signIn.RefreshSignInAsync(user);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "OtherSessionsRevoked", nameof(AppUser), user.Id)); await db.SaveChangesAsync();
+        return Results.NoContent();
     }).RequireAuthorization();
 }
 
@@ -156,6 +308,16 @@ static void MapPlatform(WebApplication app)
         await db.SaveChangesAsync();
         return Results.NoContent();
     });
+    platform.MapPost("/organizations/{id:guid}/reset-owner-password", async (Guid id, PlatformOwnerPasswordResetRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var platformUser = await users.GetUserAsync(principal); if (platformUser is null) return Results.Unauthorized();
+        var owner = await users.FindByEmailAsync(request.OwnerEmail.Trim());
+        if (owner is null || owner.OrganizationId != id || !await users.IsInRoleAsync(owner, Roles.Owner)) return Results.NotFound(new { error = "That owner account was not found in this organization." });
+        var token = await users.GeneratePasswordResetTokenAsync(owner); var result = await users.ResetPasswordAsync(owner, token, request.NewPassword);
+        if (!result.Succeeded) return Results.BadRequest(new { error = string.Join("; ", result.Errors.Select(x => x.Description)) });
+        await users.UpdateSecurityStampAsync(owner); db.AuditEvents.Add(Audit(id, platformUser.Id, "OwnerPasswordResetByPlatform", nameof(AppUser), owner.Id)); await db.SaveChangesAsync();
+        return Results.NoContent();
+    });
     platform.MapPut("/account", async (PlatformAccountUpdateRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, SignInManager<AppUser> signIn, WalletsDbContext db) =>
     {
         var user = await users.GetUserAsync(principal);
@@ -193,13 +355,14 @@ static void MapTeam(WebApplication app)
     {
         var actor = await RequireOrganizationUser(principal, users);
         if (!CanManageTeam(principal, actor)) return Results.Forbid();
+        var actorRole = await GetRole(users, actor);
         var rows = await db.Users.AsNoTracking().Where(x => x.OrganizationId == actor.OrganizationId).OrderBy(x => x.DisplayName).ToListAsync();
         var result = new List<object>();
         foreach (var user in rows)
         {
             var role = (await users.GetRolesAsync(user)).SingleOrDefault() ?? Roles.Employee;
             var wallets = await db.UserWalletAccess.Where(x => x.UserId == user.Id).Select(x => x.WalletId).ToListAsync();
-            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, WalletIds = wallets });
+            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.AllWalletAccess, WalletIds = wallets, CanEdit = user.Id != actor.Id && AccessControl.CanManageRole(actorRole, role) });
         }
         return Results.Ok(result);
     });
@@ -207,37 +370,85 @@ static void MapTeam(WebApplication app)
     {
         var actor = await RequireOrganizationUser(principal, users);
         if (!CanManageTeam(principal, actor)) return Results.Forbid();
-        if (!Roles.OrganizationRoles.Contains(request.Role) || request.Role == Roles.Owner && !principal.IsInRole(Roles.Owner)) return Results.Forbid();
+        var actorRole = await GetRole(users, actor);
+        if (!Roles.OrganizationRoles.Contains(request.Role) || !AccessControl.CanManageRole(actorRole, request.Role)) return Results.Forbid();
+        if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Email)) return Results.BadRequest(new { error = "Name and email are required." });
+        await using var transaction = await db.Database.BeginTransactionAsync();
         var user = new AppUser
         {
             UserName = request.Email.Trim(), Email = request.Email.Trim(), EmailConfirmed = true, DisplayName = request.DisplayName.Trim(), OrganizationId = actor.OrganizationId,
             VisibleReceiptDays = Math.Clamp(request.VisibleReceiptDays, 1, 3650), IsActive = true,
             CanViewReports = request.CanViewReports, CanExportReports = request.CanExportReports,
-            CanManageDevices = request.CanManageDevices, CanManageTeam = request.CanManageTeam
+            CanManageDevices = request.CanManageDevices, CanManageTeam = request.CanManageTeam, AllWalletAccess = request.AllWalletAccess
         };
         ApplyRoleDefaults(user, request.Role);
         var created = await users.CreateAsync(user, request.Password);
         if (!created.Succeeded) return Results.BadRequest(new { error = string.Join("; ", created.Errors.Select(x => x.Description)) });
         await users.AddToRoleAsync(user, request.Role);
-        await SetWalletAccess(db, user, actor.OrganizationId!.Value, request.WalletIds);
-        db.AuditEvents.Add(Audit(actor.OrganizationId, actor.Id, "TeamMemberCreated", nameof(AppUser), user.Id));
+        var accessError = await SetWalletAccess(db, user, actor.OrganizationId!.Value, request.AllWalletAccess, request.WalletIds);
+        if (accessError is not null) { await users.DeleteAsync(user); return Results.BadRequest(new { error = accessError }); }
+        db.AuditEvents.Add(Audit(actor.OrganizationId, actor.Id, "TeamMemberCreated", nameof(AppUser), user.Id, new { request.Role, request.AllWalletAccess, request.WalletIds }));
         await db.SaveChangesAsync();
+        await transaction.CommitAsync();
         return Results.Created($"/api/team/{user.Id}", new { user.Id });
     });
-    team.MapPut("/{id}/access", async (string id, UpdateTeamAccessRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    team.MapPut("/{id}", async (string id, UpdateTeamMemberRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var actor = await RequireOrganizationUser(principal, users);
         if (!CanManageTeam(principal, actor)) return Results.Forbid();
-        var user = await db.Users.SingleAsync(x => x.Id == id && x.OrganizationId == actor.OrganizationId);
+        var user = await db.Users.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == actor.OrganizationId);
+        if (user is null) return Results.NotFound();
+        if (user.Id == actor.Id) return Results.BadRequest(new { error = "Use Account settings to update your own account." });
+        var actorRole = await GetRole(users, actor);
+        var currentRole = await GetRole(users, user);
+        if (!Roles.OrganizationRoles.Contains(request.Role) || !AccessControl.CanManageRole(actorRole, currentRole) || !AccessControl.CanManageRole(actorRole, request.Role)) return Results.Forbid();
+        if (currentRole == Roles.Owner && (!request.IsActive || request.Role != Roles.Owner))
+        {
+            var activeOwnerCount = await ActiveOwnerCount(db, actor.OrganizationId!.Value);
+            if (activeOwnerCount <= 1) return Results.BadRequest(new { error = "The organization must keep at least one active owner." });
+        }
+        var email = request.Email.Trim(); var displayName = request.DisplayName.Trim();
+        if (email.Length == 0 || displayName.Length == 0) return Results.BadRequest(new { error = "Name and email are required." });
+        var duplicate = await users.FindByEmailAsync(email);
+        if (duplicate is not null && duplicate.Id != user.Id) return Results.Conflict(new { error = "That email address is already in use." });
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        user.Email = email; user.UserName = email; user.EmailConfirmed = true; user.DisplayName = displayName;
         user.VisibleReceiptDays = Math.Clamp(request.VisibleReceiptDays, 1, 3650);
         user.IsActive = request.IsActive;
         user.CanViewReports = request.CanViewReports;
         user.CanExportReports = request.CanExportReports;
         user.CanManageDevices = request.CanManageDevices;
         user.CanManageTeam = request.CanManageTeam;
-        await SetWalletAccess(db, user, actor.OrganizationId!.Value, request.WalletIds);
-        db.AuditEvents.Add(Audit(actor.OrganizationId, actor.Id, "TeamAccessUpdated", nameof(AppUser), user.Id));
+        user.AllWalletAccess = request.AllWalletAccess;
+        ApplyRoleDefaults(user, request.Role);
+        var accessError = await SetWalletAccess(db, user, actor.OrganizationId!.Value, request.AllWalletAccess, request.WalletIds);
+        if (accessError is not null) return Results.BadRequest(new { error = accessError });
+        if (currentRole != request.Role)
+        {
+            await users.RemoveFromRoleAsync(user, currentRole);
+            await users.AddToRoleAsync(user, request.Role);
+        }
+        var updated = await users.UpdateAsync(user);
+        if (!updated.Succeeded) return Results.BadRequest(new { error = string.Join("; ", updated.Errors.Select(x => x.Description)) });
+        await users.UpdateSecurityStampAsync(user);
+        db.AuditEvents.Add(Audit(actor.OrganizationId, actor.Id, "TeamMemberUpdated", nameof(AppUser), user.Id, new { PreviousRole = currentRole, request.Role, request.IsActive, request.AllWalletAccess, request.WalletIds }));
         await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+        return Results.NoContent();
+    });
+    team.MapPost("/{id}/reset-password", async (string id, ResetPasswordRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var actor = await RequireOrganizationUser(principal, users);
+        if (!CanManageTeam(principal, actor)) return Results.Forbid();
+        var user = await db.Users.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == actor.OrganizationId);
+        if (user is null) return Results.NotFound();
+        if (user.Id == actor.Id) return Results.BadRequest(new { error = "Use Account settings to change your own password." });
+        if (!AccessControl.CanManageRole(await GetRole(users, actor), await GetRole(users, user))) return Results.Forbid();
+        var token = await users.GeneratePasswordResetTokenAsync(user);
+        var result = await users.ResetPasswordAsync(user, token, request.NewPassword);
+        if (!result.Succeeded) return Results.BadRequest(new { error = string.Join("; ", result.Errors.Select(x => x.Description)) });
+        await users.UpdateSecurityStampAsync(user);
+        db.AuditEvents.Add(Audit(actor.OrganizationId, actor.Id, "TeamPasswordReset", nameof(AppUser), user.Id)); await db.SaveChangesAsync();
         return Results.NoContent();
     });
 }
@@ -245,12 +456,18 @@ static void MapTeam(WebApplication app)
 static void MapWallets(WebApplication app)
 {
     var wallets = app.MapGroup("/api/wallets").RequireAuthorization();
-    wallets.MapGet("/", async (ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    wallets.MapGet("/", async (bool? includeInactive, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
-        var query = db.Wallets.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId && x.IsActive);
-        if (!IsOrganizationAdmin(principal)) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
-        return Results.Ok(await query.OrderBy(x => x.Name).Select(x => new { x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode, x.DeviceId, x.IsActive, x.CreatedAtUtc }).ToListAsync());
+        var query = db.Wallets.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
+        if (includeInactive != true || !IsOrganizationAdmin(principal)) query = query.Where(x => x.IsActive);
+        if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
+        return Results.Ok(await query.OrderBy(x => x.Name).Select(x => new
+        {
+            x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode, x.DeviceId, x.IsActive, x.OpeningBalance, x.BalanceLimit, x.CreatedAtUtc,
+            CurrentBalance = x.OpeningBalance + db.WalletReceipts.Where(r => r.WalletId == x.Id).Sum(r => (decimal?)r.Amount)!.GetValueOrDefault()
+                + db.WalletLedgerEntries.Where(entry => entry.WalletId == x.Id).Sum(entry => (decimal?)entry.Amount)!.GetValueOrDefault()
+        }).ToListAsync());
     });
     wallets.MapPost("/", async (WalletRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -262,8 +479,8 @@ static void MapWallets(WebApplication app)
         var normalizedAccount = NormalizeAccount(request.AccountNumber);
         if (await db.Wallets.AnyAsync(x => x.OrganizationId == user.OrganizationId && x.Provider == provider && x.NormalizedAccountNumber == normalizedAccount))
             return Results.BadRequest(new { error = "This account number already exists for the selected provider." });
-        if (request.DeviceId.HasValue && !await db.WalletDevices.AnyAsync(x => x.Id == request.DeviceId && x.OrganizationId == user.OrganizationId)) return Results.BadRequest(new { error = "Invalid device." });
-        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = provider, AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = normalizedAccount, CurrencyCode = currency, DeviceId = request.DeviceId };
+        if (request.DeviceId.HasValue && !await db.WalletDevices.AnyAsync(x => x.Id == request.DeviceId && x.OrganizationId == user.OrganizationId && x.IsActive)) return Results.BadRequest(new { error = "The selected device is not active in this organization." });
+        var wallet = new Wallet { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Provider = provider, AccountNumber = request.AccountNumber.Trim(), NormalizedAccountNumber = normalizedAccount, CurrencyCode = currency, DeviceId = request.DeviceId, OpeningBalance = request.OpeningBalance, BalanceLimit = request.BalanceLimit > 0 ? request.BalanceLimit : null };
         db.Wallets.Add(wallet);
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletCreated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
@@ -278,8 +495,10 @@ static void MapWallets(WebApplication app)
         var normalizedAccount = NormalizeAccount(request.AccountNumber);
         if (await db.Wallets.AnyAsync(x => x.Id != id && x.OrganizationId == user.OrganizationId && x.Provider == provider && x.NormalizedAccountNumber == normalizedAccount))
             return Results.BadRequest(new { error = "This account number already exists for the selected provider." });
+        if (request.DeviceId.HasValue && !await db.WalletDevices.AnyAsync(x => x.Id == request.DeviceId && x.OrganizationId == user.OrganizationId && x.IsActive)) return Results.BadRequest(new { error = "The selected device is not active in this organization." });
         wallet.Name = request.Name.Trim(); wallet.Provider = provider; wallet.AccountNumber = request.AccountNumber.Trim();
         wallet.NormalizedAccountNumber = normalizedAccount; wallet.CurrencyCode = currency; wallet.DeviceId = request.DeviceId; wallet.IsActive = request.IsActive;
+        wallet.OpeningBalance = request.OpeningBalance; wallet.BalanceLimit = request.BalanceLimit > 0 ? request.BalanceLimit : null;
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletUpdated", nameof(Wallet), wallet.Id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();
@@ -314,14 +533,14 @@ static void MapDevices(WebApplication app)
     {
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        return Results.Ok(await db.WalletDevices.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId && x.IsActive).OrderByDescending(x => x.LastSeenAtUtc)
-            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id) }).ToListAsync());
+        return Results.Ok(await db.WalletDevices.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId).OrderByDescending(x => x.IsActive).ThenByDescending(x => x.LastSeenAtUtc)
+            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, x.LastHeartbeatAtUtc, x.LastSmsAtUtc, x.LastNotificationAtUtc, x.LastCaptureAtUtc, x.AppVersion, x.AndroidVersion, x.PendingUploadCount, x.FailedUploadCount, x.SmsPermissionGranted, x.NotificationPermissionGranted, x.BatteryOptimizationIgnored, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id && w.IsActive) }).ToListAsync());
     }).RequireAuthorization();
     devices.MapPost("/pairing", async (DevicePairingRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        var code = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+        var code = await UniquePairingCode(db);
         var device = new WalletDevice { OrganizationId = user.OrganizationId!.Value, Name = request.Name.Trim(), Platform = "Android", PairingCodeHash = Hash(code), PairingCodeExpiresAtUtc = DateTime.UtcNow.AddMinutes(10) };
         db.WalletDevices.Add(device);
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "DevicePairingCreated", nameof(WalletDevice), device.Id.ToString()));
@@ -339,6 +558,22 @@ static void MapDevices(WebApplication app)
         await db.SaveChangesAsync();
         var wallets = await db.Wallets.Where(x => x.DeviceId == device.Id && x.IsActive).Select(x => new { x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode }).ToListAsync();
         return Results.Ok(new { DeviceId = device.Id, DeviceToken = token, Wallets = wallets });
+    }).RequireRateLimiting("pairing");
+    devices.MapPost("/heartbeat", async (DeviceHeartbeatRequest request, HttpContext http, WalletsDbContext db) =>
+    {
+        var device = await DeviceFromToken(http, db);
+        if (device is null) return Results.Unauthorized();
+        var now = DateTime.UtcNow;
+        device.LastSeenAtUtc = now; device.LastHeartbeatAtUtc = now;
+        device.AppVersion = Clean(request.AppVersion, 40); device.AndroidVersion = Clean(request.AndroidVersion, 40);
+        device.PendingUploadCount = Math.Clamp(request.PendingUploadCount, 0, 100000);
+        device.FailedUploadCount = Math.Clamp(request.FailedUploadCount, 0, 100000);
+        device.SmsPermissionGranted = request.SmsPermissionGranted; device.NotificationPermissionGranted = request.NotificationPermissionGranted;
+        device.BatteryOptimizationIgnored = request.BatteryOptimizationIgnored;
+        if (request.LastSmsAtUtc.HasValue) device.LastSmsAtUtc = request.LastSmsAtUtc.Value.ToUniversalTime();
+        if (request.LastNotificationAtUtc.HasValue) device.LastNotificationAtUtc = request.LastNotificationAtUtc.Value.ToUniversalTime();
+        if (device.OfflineAlertSentAtUtc.HasValue) device.OfflineAlertSentAtUtc = null;
+        await db.SaveChangesAsync(); return Results.NoContent();
     });
     devices.MapPut("/{id:guid}/status", async (Guid id, ToggleRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -349,6 +584,29 @@ static void MapDevices(WebApplication app)
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, request.Enabled ? "DeviceActivated" : "DeviceDeactivated", nameof(WalletDevice), id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();
+    }).RequireAuthorization();
+    devices.MapPut("/{id:guid}", async (Guid id, UpdateDeviceRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var device = await db.WalletDevices.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (device is null) return Results.NotFound();
+        if (string.IsNullOrWhiteSpace(request.Name)) return Results.BadRequest(new { error = "Device name is required." });
+        device.Name = request.Name.Trim(); device.IsActive = request.IsActive;
+        if (!request.IsActive) { device.TokenHash = null; device.InstallationId = null; }
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "DeviceUpdated", nameof(WalletDevice), id.ToString(), new { device.Name, device.IsActive }));
+        await db.SaveChangesAsync(); return Results.NoContent();
+    }).RequireAuthorization();
+    devices.MapPost("/{id:guid}/pairing", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var device = await db.WalletDevices.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (device is null) return Results.NotFound();
+        var code = await UniquePairingCode(db);
+        device.IsActive = true; device.TokenHash = null; device.InstallationId = null; device.PairingCodeHash = Hash(code); device.PairingCodeExpiresAtUtc = DateTime.UtcNow.AddMinutes(10);
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "DeviceRepairingCreated", nameof(WalletDevice), id.ToString()));
+        await db.SaveChangesAsync(); return Results.Ok(new { device.Id, PairingCode = code, ExpiresAtUtc = device.PairingCodeExpiresAtUtc });
     }).RequireAuthorization();
     devices.MapDelete("/{id:guid}", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -378,51 +636,108 @@ static void MapReceipts(WebApplication app)
 {
     app.MapPost("/api/captures", async (CaptureRequest request, HttpContext http, WalletsDbContext db, IDataProtectionProvider protection) =>
     {
-        var token = http.Request.Headers["X-Wallet-Device-Token"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(token)) return Results.Unauthorized();
-        var tokenHash = Hash(token);
-        var device = await db.WalletDevices.SingleOrDefaultAsync(x => x.TokenHash == tokenHash && x.IsActive);
+        var device = await DeviceFromToken(http, db);
         if (device is null) return Results.Unauthorized();
-        device.LastSeenAtUtc = DateTime.UtcNow;
-        if (await db.WalletReceipts.AnyAsync(x => x.DeviceId == device.Id && x.Fingerprint == request.Fingerprint)) { await db.SaveChangesAsync(); return Results.Ok(new { duplicate = true }); }
+        var now = DateTime.UtcNow;
+        device.LastSeenAtUtc = now; device.LastCaptureAtUtc = now;
+        var existingEvent = await db.CaptureEvents.SingleOrDefaultAsync(x => x.DeviceId == device.Id && x.Fingerprint == request.Fingerprint);
+        if (existingEvent is not null)
+        {
+            existingEvent.AttemptCount++; existingEvent.LastSeenAtUtc = now;
+            await db.SaveChangesAsync(); return Results.Ok(new { duplicate = true, captureEventId = existingEvent.Id, status = existingEvent.Status, reason = existingEvent.Reason });
+        }
         var raw = string.Join("\n", new[] { request.Title, request.Body }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
-        if (!WalletMessageParser.TryParse(request.SourcePackage, raw, out var parsed)) { await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true }); }
-        if (!string.IsNullOrWhiteSpace(parsed.Reference) && await db.WalletReceipts.AnyAsync(x => x.OrganizationId == device.OrganizationId && x.Provider == parsed.Provider && x.ProviderReference == parsed.Reference))
-            return Results.Ok(new { duplicate = true });
+        var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
+        var receivedAt = request.ReceivedAtUtc.Kind == DateTimeKind.Utc ? request.ReceivedAtUtc : request.ReceivedAtUtc.ToUniversalTime();
+        var capture = new CaptureEvent
+        {
+            OrganizationId = device.OrganizationId, DeviceId = device.Id, Fingerprint = request.Fingerprint,
+            Status = "Processing", Reason = "received", SourcePackage = request.SourcePackage ?? "unknown",
+            ProtectedMessage = protector.Protect(raw), ReceivedAtUtc = receivedAt, FirstSeenAtUtc = now, LastSeenAtUtc = now
+        };
+        db.CaptureEvents.Add(capture);
+        var fingerprintReceipt = await db.WalletReceipts.FirstOrDefaultAsync(x => x.DeviceId == device.Id && x.Fingerprint == request.Fingerprint);
+        if (fingerprintReceipt is not null)
+        {
+            capture.Status = "Duplicate"; capture.Reason = "device-fingerprint-exists"; capture.ReceiptId = fingerprintReceipt.Id; capture.WalletId = fingerprintReceipt.WalletId;
+            await db.SaveChangesAsync(); return Results.Ok(new { duplicate = true, captureEventId = capture.Id });
+        }
+        if (!WalletMessageParser.TryParse(request.SourcePackage, raw, out var parsed))
+        {
+            capture.Status = "Unmatched"; capture.Reason = "unsupported-or-not-incoming";
+            await QueueCaptureIssueNotifications(db, device, capture);
+            await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true, reason = capture.Reason, captureEventId = capture.Id });
+        }
+        capture.Provider = parsed.Provider; capture.Amount = parsed.Amount; capture.CurrencyCode = parsed.CurrencyCode;
+        capture.Sender = parsed.Sender; capture.Destination = parsed.Destination; capture.ProviderReference = parsed.Reference;
+        if (!string.IsNullOrWhiteSpace(parsed.Reference))
+        {
+            var duplicateReceipt = await db.WalletReceipts.FirstOrDefaultAsync(x => x.OrganizationId == device.OrganizationId && x.Provider == parsed.Provider && x.ProviderReference == parsed.Reference);
+            if (duplicateReceipt is not null)
+            {
+                capture.Status = "Duplicate"; capture.Reason = "provider-reference-exists"; capture.ReceiptId = duplicateReceipt.Id; capture.WalletId = duplicateReceipt.WalletId;
+                await db.SaveChangesAsync(); return Results.Ok(new { duplicate = true, captureEventId = capture.Id });
+            }
+        }
         var walletQuery = db.Wallets.Where(x => x.OrganizationId == device.OrganizationId && x.DeviceId == device.Id && x.IsActive);
         Wallet? wallet = null;
         if (request.WalletId.HasValue) wallet = await walletQuery.SingleOrDefaultAsync(x => x.Id == request.WalletId);
         if (wallet is null && !string.IsNullOrWhiteSpace(parsed.Destination))
         {
             var normalizedDestination = NormalizeAccount(parsed.Destination);
-            wallet = await walletQuery.SingleOrDefaultAsync(x => x.NormalizedAccountNumber == normalizedDestination);
+            var exactCandidates = await walletQuery.Where(x => x.Provider == parsed.Provider && x.CurrencyCode == parsed.CurrencyCode && x.NormalizedAccountNumber == normalizedDestination).Take(2).ToListAsync();
+            if (exactCandidates.Count == 1) wallet = exactCandidates[0];
+            else if (exactCandidates.Count > 1) capture.Reason = "ambiguous-destination";
         }
         if (wallet is null)
         {
             var providerCandidates = await walletQuery.Where(x => x.Provider == parsed.Provider && x.CurrencyCode == parsed.CurrencyCode).Take(2).ToListAsync();
             if (providerCandidates.Count == 1) wallet = providerCandidates[0];
+            else if (providerCandidates.Count > 1) capture.Reason = "ambiguous-provider-wallet";
         }
         if (wallet is null)
         {
             var candidates = await walletQuery.Take(2).ToListAsync();
             if (candidates.Count == 1) wallet = candidates[0];
+            else if (candidates.Count > 1 && capture.Reason == "received") capture.Reason = "ambiguous-wallet";
         }
-        if (wallet is null) { await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true, reason = "wallet-not-resolved" }); }
-        var receivedAt = request.ReceivedAtUtc.Kind == DateTimeKind.Utc ? request.ReceivedAtUtc : request.ReceivedAtUtc.ToUniversalTime();
-        if (receivedAt < DateTime.UtcNow.AddDays(-2) || receivedAt > DateTime.UtcNow.AddMinutes(10)) return Results.Accepted(value: new { ignored = true, reason = "outside-capture-window" });
+        if (wallet is null)
+        {
+            capture.Status = "Unmatched"; if (capture.Reason == "received") capture.Reason = "wallet-not-resolved";
+            await QueueCaptureIssueNotifications(db, device, capture);
+            await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true, reason = capture.Reason, captureEventId = capture.Id });
+        }
+        capture.WalletId = wallet.Id;
+        if (receivedAt < DateTime.UtcNow.AddDays(-30) || receivedAt > DateTime.UtcNow.AddMinutes(10))
+        {
+            capture.Status = "Rejected"; capture.Reason = "outside-30-day-capture-window";
+            await QueueCaptureIssueNotifications(db, device, capture);
+            await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true, reason = capture.Reason, captureEventId = capture.Id });
+        }
         var receipt = new WalletReceipt
         {
             OrganizationId = device.OrganizationId, WalletId = wallet.Id, DeviceId = device.Id, Provider = parsed.Provider,
             Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference,
-            Fingerprint = request.Fingerprint, ProtectedMessage = protection.CreateProtector("WalletsHub.Receipt.v1").Protect(raw),
+            Fingerprint = request.Fingerprint, ProtectedMessage = capture.ProtectedMessage,
             SourcePackage = request.SourcePackage ?? "unknown", Status = ReceiptStatus.Confirmed, ReceivedAtUtc = receivedAt
         };
         db.WalletReceipts.Add(receipt);
+        capture.Status = "Accepted"; capture.Reason = "receipt-created"; capture.ReceiptId = receipt.Id;
+        var currentWalletBalance = await WalletBalance(db, wallet);
+        var recentAmounts = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.ReceivedAtUtc >= DateTime.UtcNow.AddDays(-30)).Select(x => x.Amount).ToListAsync();
+        var unusual = recentAmounts.Count >= 10 && parsed.Amount > recentAmounts.Average() * 5;
+        var exceedsLimit = wallet.BalanceLimit.HasValue && currentWalletBalance + parsed.Amount > wallet.BalanceLimit.Value;
+        if (unusual || exceedsLimit)
+        {
+            var managers = await db.Users.Where(x => x.OrganizationId == device.OrganizationId && x.IsActive && (x.CanManageDevices || x.CanViewReports)).Select(x => x.Id).ToListAsync();
+            foreach (var managerId in managers)
+                db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = managerId, Title = exceedsLimit ? $"{wallet.Name} exceeded its limit" : "Unusually large payment", Body = $"{parsed.Amount:N2} {parsed.CurrencyCode} was received in {wallet.Name}. Review the wallet balance and receipt.", Link = "/receipts", SourceId = receipt.Id });
+        }
         var recipientRoles = await (from candidate in db.Users
             join userRole in db.UserRoles on candidate.Id equals userRole.UserId
             join role in db.Roles on userRole.RoleId equals role.Id
             where candidate.OrganizationId == device.OrganizationId && candidate.IsActive
-                && (role.Name == Roles.Owner || role.Name == Roles.Admin || db.UserWalletAccess.Any(access => access.UserId == candidate.Id && access.WalletId == wallet.Id))
+                && (role.Name == Roles.Owner || role.Name == Roles.Admin || candidate.AllWalletAccess || db.UserWalletAccess.Any(access => access.UserId == candidate.Id && access.WalletId == wallet.Id))
             select new { candidate.Id, Role = role.Name! }).ToListAsync();
         var recipientIds = recipientRoles.Select(x => x.Id).ToList();
         var preferences = await db.NotificationPreferences.Where(x => recipientIds.Contains(x.UserId) && (x.WalletId == null || x.WalletId == wallet.Id)).ToListAsync();
@@ -434,23 +749,122 @@ static void MapReceipts(WebApplication app)
             if (enabled && meetsThreshold)
                 db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = recipient.Id, Title = $"{parsed.Amount:N2} {parsed.CurrencyCode} received", Body = $"{parsed.Provider} payment detected for {wallet.Name}.", Link = "/receipts", SourceId = receipt.Id });
         }
-        db.AuditEvents.Add(Audit(device.OrganizationId, null, "ReceiptDetected", nameof(WalletReceipt), receipt.Id.ToString()));
+        db.AuditEvents.Add(Audit(device.OrganizationId, null, "ReceiptDetected", nameof(WalletReceipt), receipt.Id.ToString(), new { wallet.Id, parsed.Provider, parsed.Amount, parsed.CurrencyCode, CaptureEventId = capture.Id }));
         await db.SaveChangesAsync();
-        return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id, receipt.Amount, receipt.CurrencyCode, receipt.Provider });
+        return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id, receipt.Amount, receipt.CurrencyCode, receipt.Provider, captureEventId = capture.Id });
     });
 
     var receipts = app.MapGroup("/api/receipts").RequireAuthorization();
-    receipts.MapGet("/", async (DateTime? from, DateTime? to, Guid? walletId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
+    receipts.MapGet("/", async ([AsParameters] ReceiptSearchRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
     {
         var user = await RequireOrganizationUser(principal, users);
-        var start = from?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-user.VisibleReceiptDays);
-        var end = to?.ToUniversalTime() ?? DateTime.UtcNow;
+        var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-user.VisibleReceiptDays);
+        var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
         var query = ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end);
-        if (walletId.HasValue) query = query.Where(x => x.WalletId == walletId);
-        var rows = await query.OrderByDescending(x => x.ReceivedAtUtc).Take(1000).Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { Receipt = r, WalletName = w.Name }).ToListAsync();
+        var walletIds = ParseGuids(request.WalletIds);
+        if (request.WalletId.HasValue) walletIds.Add(request.WalletId.Value);
+        if (walletIds.Count > 0) query = query.Where(x => walletIds.Contains(x.WalletId));
+        if (!string.IsNullOrWhiteSpace(request.Provider)) query = query.Where(x => x.Provider == request.Provider);
+        if (!string.IsNullOrWhiteSpace(request.Currency)) query = query.Where(x => x.CurrencyCode == request.Currency.ToUpper());
+        if (request.DeviceId.HasValue) query = query.Where(x => x.DeviceId == request.DeviceId);
+        if (request.MinAmount.HasValue) query = query.Where(x => x.Amount >= request.MinAmount);
+        if (request.MaxAmount.HasValue) query = query.Where(x => x.Amount <= request.MaxAmount);
+        if (request.MissingSender == true) query = query.Where(x => x.Sender == null || x.Sender == "");
+        if (request.MissingReference == true) query = query.Where(x => x.ProviderReference == null || x.ProviderReference == "");
+        if (!string.IsNullOrWhiteSpace(request.Search))
+        {
+            var search = request.Search.Trim();
+            if (string.Equals(request.SearchMode, "exact", StringComparison.OrdinalIgnoreCase))
+            {
+                var isAmount = decimal.TryParse(search, NumberStyles.Number, CultureInfo.InvariantCulture, out var exactAmount);
+                query = query.Where(x => x.Sender == search || x.ProviderReference == search || isAmount && x.Amount == exactAmount);
+            }
+            else
+            {
+                var pattern = $"%{EscapeLike(search)}%";
+                query = query.Where(x => EF.Functions.ILike(x.Sender ?? "", pattern) || EF.Functions.ILike(x.ProviderReference ?? "", pattern) || EF.Functions.ILike(x.Provider, pattern));
+            }
+        }
+        var total = await query.CountAsync();
+        query = request.Sort?.ToLowerInvariant() switch
+        {
+            "oldest" => query.OrderBy(x => x.ReceivedAtUtc),
+            "amount-high" => query.OrderByDescending(x => x.Amount).ThenByDescending(x => x.ReceivedAtUtc),
+            "amount-low" => query.OrderBy(x => x.Amount).ThenByDescending(x => x.ReceivedAtUtc),
+            _ => query.OrderByDescending(x => x.ReceivedAtUtc)
+        };
+        var page = Math.Max(request.Page ?? 1, 1); var pageSize = Math.Clamp(request.PageSize ?? 30, 10, 200);
+        var rows = await query.Skip((page - 1) * pageSize).Take(pageSize)
+            .Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { Receipt = r, WalletName = w.Name })
+            .Join(db.WalletDevices, row => row.Receipt.DeviceId, d => d.Id, (row, d) => new { row.Receipt, row.WalletName, DeviceName = d.Name }).ToListAsync();
         var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
-        return Results.Ok(rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Message = Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc }));
+        var maskMessages = await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.MaskSensitiveMessages).SingleAsync();
+        var items = rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.DeviceName, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Message = maskMessages ? MaskSensitive(Unprotect(protector, x.Receipt.ProtectedMessage)) : Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc });
+        return Results.Ok(new { Items = items, Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
     });
+
+    app.MapGet("/api/capture-events", async ([AsParameters] CaptureEventSearchRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var query = db.CaptureEvents.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
+        if (!string.IsNullOrWhiteSpace(request.Status)) query = query.Where(x => x.Status == request.Status);
+        if (!string.IsNullOrWhiteSpace(request.Reason)) query = query.Where(x => x.Reason == request.Reason);
+        if (request.DeviceId.HasValue) query = query.Where(x => x.DeviceId == request.DeviceId);
+        if (request.From.HasValue) query = query.Where(x => x.ReceivedAtUtc >= request.From.Value.ToUniversalTime());
+        if (request.To.HasValue) query = query.Where(x => x.ReceivedAtUtc <= request.To.Value.ToUniversalTime());
+        var total = await query.CountAsync(); var page = Math.Max(request.Page ?? 1, 1); var pageSize = Math.Clamp(request.PageSize ?? 40, 10, 200);
+        var rows = await query.OrderByDescending(x => x.LastSeenAtUtc).Skip((page - 1) * pageSize).Take(pageSize)
+            .Join(db.WalletDevices, x => x.DeviceId, d => d.Id, (x, d) => new { Event = x, DeviceName = d.Name })
+            .GroupJoin(db.Wallets, x => x.Event.WalletId, w => w.Id, (x, wallets) => new { x.Event, x.DeviceName, Wallets = wallets })
+            .SelectMany(x => x.Wallets.DefaultIfEmpty(), (x, wallet) => new { x.Event, x.DeviceName, WalletName = wallet == null ? null : wallet.Name }).ToListAsync();
+        var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
+        var maskMessages = await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.MaskSensitiveMessages).SingleAsync();
+        var items = rows.Select(x => new { x.Event.Id, x.Event.Status, x.Event.Reason, x.Event.DeviceId, x.DeviceName, x.Event.WalletId, x.WalletName, x.Event.ReceiptId, x.Event.Provider, x.Event.Amount, x.Event.CurrencyCode, x.Event.Sender, x.Event.Destination, x.Event.ProviderReference, x.Event.SourcePackage, Message = maskMessages ? MaskSensitive(Unprotect(protector, x.Event.ProtectedMessage)) : Unprotect(protector, x.Event.ProtectedMessage), x.Event.ReceivedAtUtc, x.Event.LastSeenAtUtc, x.Event.AttemptCount });
+        return Results.Ok(new { Items = items, Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
+    }).RequireAuthorization();
+    app.MapPost("/api/capture-events/{id:guid}/resolve", async (Guid id, ResolveCaptureRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var capture = await db.CaptureEvents.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (capture is null) return Results.NotFound();
+        if (capture.ReceiptId.HasValue) return Results.Conflict(new { error = "This capture already has a receipt." });
+        if (!capture.Amount.HasValue || string.IsNullOrWhiteSpace(capture.Provider) || string.IsNullOrWhiteSpace(capture.CurrencyCode)) return Results.BadRequest(new { error = "This message did not contain enough payment data to resolve manually." });
+        var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId && x.IsActive);
+        if (wallet is null || wallet.Provider != capture.Provider || wallet.CurrencyCode != capture.CurrencyCode) return Results.BadRequest(new { error = "Choose an active wallet with the same provider and currency." });
+        var receipt = new WalletReceipt { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = capture.Provider, Amount = capture.Amount.Value, CurrencyCode = capture.CurrencyCode, Sender = capture.Sender, ProviderReference = capture.ProviderReference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
+        db.WalletReceipts.Add(receipt); capture.WalletId = wallet.Id; capture.ReceiptId = receipt.Id; capture.Status = "Accepted"; capture.Reason = "manually-resolved";
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "CaptureManuallyResolved", nameof(CaptureEvent), capture.Id.ToString(), new { wallet.Id, ReceiptId = receipt.Id })); await db.SaveChangesAsync();
+        return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id });
+    }).RequireAuthorization();
+    app.MapPost("/api/capture-events/{id:guid}/retry", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
+        var capture = await db.CaptureEvents.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == user.OrganizationId);
+        if (capture is null) return Results.NotFound();
+        if (capture.ReceiptId.HasValue) return Results.Conflict(new { error = "This capture already has a receipt." });
+        var raw = Unprotect(protection.CreateProtector("WalletsHub.Receipt.v1"), capture.ProtectedMessage);
+        if (!WalletMessageParser.TryParse(capture.SourcePackage, raw, out var parsed))
+        {
+            capture.Status = "Unmatched"; capture.Reason = "still-unsupported"; capture.LastSeenAtUtc = DateTime.UtcNow; capture.AttemptCount++;
+            await db.SaveChangesAsync(); return Results.Accepted(value: new { matched = false, reason = capture.Reason });
+        }
+        capture.Provider = parsed.Provider; capture.Amount = parsed.Amount; capture.CurrencyCode = parsed.CurrencyCode; capture.Sender = parsed.Sender; capture.Destination = parsed.Destination; capture.ProviderReference = parsed.Reference; capture.AttemptCount++; capture.LastSeenAtUtc = DateTime.UtcNow;
+        var walletQuery = db.Wallets.Where(x => x.OrganizationId == capture.OrganizationId && x.DeviceId == capture.DeviceId && x.IsActive && x.Provider == parsed.Provider && x.CurrencyCode == parsed.CurrencyCode);
+        if (!string.IsNullOrWhiteSpace(parsed.Destination)) { var destination = NormalizeAccount(parsed.Destination); walletQuery = walletQuery.Where(x => x.NormalizedAccountNumber == destination); }
+        var candidates = await walletQuery.Take(2).ToListAsync();
+        if (candidates.Count != 1)
+        {
+            capture.Status = "Unmatched"; capture.Reason = candidates.Count == 0 ? "wallet-not-resolved" : "ambiguous-wallet";
+            await db.SaveChangesAsync(); return Results.Accepted(value: new { matched = false, reason = capture.Reason });
+        }
+        var wallet = candidates[0]; var receipt = new WalletReceipt { OrganizationId = capture.OrganizationId, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = parsed.Provider, Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
+        db.WalletReceipts.Add(receipt); capture.WalletId = wallet.Id; capture.ReceiptId = receipt.Id; capture.Status = "Accepted"; capture.Reason = "reprocessed";
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "CaptureReprocessed", nameof(CaptureEvent), capture.Id.ToString(), new { wallet.Id, ReceiptId = receipt.Id })); await db.SaveChangesAsync();
+        return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id });
+    }).RequireAuthorization();
 }
 
 static void MapNotifications(WebApplication app)
@@ -491,30 +905,178 @@ static void MapNotifications(WebApplication app)
         preference.DailySummary = request.DailySummary; preference.DeviceOffline = request.DeviceOffline; preference.RejectedReceipt = false;
         await db.SaveChangesAsync(); return Results.NoContent();
     });
+    settings.MapGet("/workspace", async (ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var organization = await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId);
+        return Results.Ok(new { organization.TimeZoneId, organization.MaskSensitiveMessages });
+    });
+    settings.MapPut("/workspace", async (WorkspaceSettingsRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        try { _ = ResolveTimeZone(request.TimeZoneId); } catch { return Results.BadRequest(new { error = "That time zone is not supported." }); }
+        var organization = await db.Organizations.SingleAsync(x => x.Id == user.OrganizationId);
+        organization.TimeZoneId = request.TimeZoneId; organization.MaskSensitiveMessages = request.MaskSensitiveMessages;
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WorkspaceSettingsUpdated", nameof(Organization), organization.Id.ToString(), request));
+        await db.SaveChangesAsync(); return Results.NoContent();
+    });
+}
+
+static void MapAudit(WebApplication app)
+{
+    app.MapGet("/api/audit", async ([AsParameters] AuditSearchRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        var query = db.AuditEvents.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
+        if (!string.IsNullOrWhiteSpace(request.Action)) query = query.Where(x => x.Action == request.Action);
+        if (!string.IsNullOrWhiteSpace(request.UserId)) query = query.Where(x => x.UserId == request.UserId);
+        if (request.From.HasValue) query = query.Where(x => x.CreatedAtUtc >= request.From.Value.ToUniversalTime());
+        if (request.To.HasValue) query = query.Where(x => x.CreatedAtUtc <= request.To.Value.ToUniversalTime());
+        var total = await query.CountAsync(); var page = Math.Max(request.Page ?? 1, 1); var pageSize = Math.Clamp(request.PageSize ?? 50, 10, 200);
+        var items = await query.OrderByDescending(x => x.CreatedAtUtc).Skip((page - 1) * pageSize).Take(pageSize)
+            .GroupJoin(db.Users, audit => audit.UserId, actor => actor.Id, (audit, actors) => new { Audit = audit, Actors = actors })
+            .SelectMany(x => x.Actors.DefaultIfEmpty(), (x, actor) => new { x.Audit.Id, x.Audit.Action, x.Audit.EntityType, x.Audit.EntityId, x.Audit.DetailJson, x.Audit.CreatedAtUtc, UserId = x.Audit.UserId, ActorName = actor == null ? "System / device" : actor.DisplayName }).ToListAsync();
+        return Results.Ok(new { Items = items, Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
+    }).RequireAuthorization();
+}
+
+static void MapOperations(WebApplication app)
+{
+    var operations = app.MapGroup("/api/wallet-operations").RequireAuthorization();
+    operations.MapGet("/", async (Guid? walletId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var wallets = db.Wallets.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
+        if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) wallets = wallets.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
+        if (walletId.HasValue) wallets = wallets.Where(x => x.Id == walletId);
+        var balances = await wallets.OrderBy(x => x.Name).Select(x => new
+        {
+            x.Id, x.Name, x.Provider, x.CurrencyCode, x.OpeningBalance, x.BalanceLimit, x.IsActive,
+            Received = db.WalletReceipts.Where(r => r.WalletId == x.Id).Sum(r => (decimal?)r.Amount) ?? 0,
+            Adjustments = db.WalletLedgerEntries.Where(e => e.WalletId == x.Id).Sum(e => (decimal?)e.Amount) ?? 0,
+            LastReconciledAtUtc = db.WalletReconciliations.Where(r => r.WalletId == x.Id).Max(r => (DateTime?)r.CreatedAtUtc)
+        }).ToListAsync();
+        var walletIds = balances.Select(x => x.Id).ToList();
+        var recent = await db.WalletLedgerEntries.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId && walletIds.Contains(x.WalletId)).OrderByDescending(x => x.OccurredAtUtc).Take(100)
+            .Join(db.Wallets, x => x.WalletId, w => w.Id, (x, w) => new { x.Id, x.WalletId, WalletName = w.Name, x.RelatedWalletId, x.CorrelationId, x.Type, x.Amount, x.Note, x.CreatedByUserId, x.OccurredAtUtc }).ToListAsync();
+        return Results.Ok(new { Balances = balances.Select(x => new { x.Id, x.Name, x.Provider, x.CurrencyCode, x.OpeningBalance, x.BalanceLimit, x.IsActive, x.Received, x.Adjustments, CurrentBalance = x.OpeningBalance + x.Received + x.Adjustments, x.LastReconciledAtUtc }), Recent = recent });
+    });
+    operations.MapGet("/statement", async ([AsParameters] StatementRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var walletQuery = db.Wallets.AsNoTracking().Where(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId);
+        if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) walletQuery = walletQuery.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
+        var wallet = await walletQuery.SingleOrDefaultAsync(); if (wallet is null) return Results.NotFound();
+        var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-30); var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
+        if (end <= start || end - start > TimeSpan.FromDays(366)) return Results.BadRequest(new { error = "Choose a statement period up to 366 days." });
+        var receiptRows = await db.WalletReceipts.AsNoTracking().Where(x => x.WalletId == wallet.Id && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end)
+            .Select(x => new { x.Id, Type = "Receipt", x.Amount, Note = x.Sender ?? x.ProviderReference, OccurredAtUtc = x.ReceivedAtUtc }).ToListAsync();
+        var ledgerRows = await db.WalletLedgerEntries.AsNoTracking().Where(x => x.WalletId == wallet.Id && x.OccurredAtUtc >= start && x.OccurredAtUtc <= end)
+            .Select(x => new { x.Id, x.Type, x.Amount, x.Note, x.OccurredAtUtc }).ToListAsync();
+        var rows = receiptRows.Concat(ledgerRows).OrderByDescending(x => x.OccurredAtUtc).ToList(); var total = rows.Count; var page = Math.Max(request.Page ?? 1, 1); var pageSize = Math.Clamp(request.PageSize ?? 50, 10, 200);
+        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0; var adjustments = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        return Results.Ok(new { Wallet = new { wallet.Id, wallet.Name, wallet.Provider, wallet.CurrencyCode }, CurrentBalance = wallet.OpeningBalance + received + adjustments, Items = rows.Skip((page - 1) * pageSize).Take(pageSize), Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
+    });
+    operations.MapPost("/entry", async (LedgerEntryRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users); if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId && x.IsActive);
+        if (wallet is null) return Results.BadRequest(new { error = "Choose an active wallet." });
+        if (request.Amount == 0) return Results.BadRequest(new { error = "Amount cannot be zero." });
+        var type = request.Type.Trim();
+        var amount = type switch { "Withdrawal" => -Math.Abs(request.Amount), "Deposit" => Math.Abs(request.Amount), "Adjustment" => request.Amount, _ => 0 };
+        if (amount == 0) return Results.BadRequest(new { error = "Type must be Withdrawal, Deposit, or Adjustment." });
+        var currentBalance = await WalletBalance(db, wallet);
+        if (type == "Withdrawal" && currentBalance < Math.Abs(amount)) return Results.BadRequest(new { error = "This withdrawal exceeds the calculated wallet balance." });
+        if (type == "Deposit" && wallet.BalanceLimit.HasValue && currentBalance + amount > wallet.BalanceLimit) return Results.BadRequest(new { error = "This deposit would exceed the configured wallet limit." });
+        var entry = new WalletLedgerEntry { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, Type = type, Amount = amount, Note = Clean(request.Note, 500), CreatedByUserId = user.Id, OccurredAtUtc = request.OccurredAtUtc?.ToUniversalTime() ?? DateTime.UtcNow };
+        db.WalletLedgerEntries.Add(entry); db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletLedgerEntryCreated", nameof(WalletLedgerEntry), entry.Id.ToString(), new { wallet.Id, entry.Type, entry.Amount, entry.Note })); await db.SaveChangesAsync();
+        return Results.Created($"/api/wallet-operations/{entry.Id}", new { entry.Id });
+    });
+    operations.MapPost("/transfer", async (WalletTransferRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users); if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        if (request.FromWalletId == request.ToWalletId || request.Amount <= 0) return Results.BadRequest(new { error = "Choose two different wallets and a positive amount." });
+        var wallets = await db.Wallets.Where(x => x.OrganizationId == user.OrganizationId && x.IsActive && (x.Id == request.FromWalletId || x.Id == request.ToWalletId)).ToListAsync();
+        if (wallets.Count != 2 || wallets[0].CurrencyCode != wallets[1].CurrencyCode) return Results.BadRequest(new { error = "Both active wallets must exist and use the same currency." });
+        var source = wallets.Single(x => x.Id == request.FromWalletId); var destination = wallets.Single(x => x.Id == request.ToWalletId);
+        var sourceBalance = await WalletBalance(db, source); var destinationBalance = await WalletBalance(db, destination);
+        if (sourceBalance < request.Amount) return Results.BadRequest(new { error = "The transfer exceeds the calculated source-wallet balance." });
+        if (destination.BalanceLimit.HasValue && destinationBalance + request.Amount > destination.BalanceLimit) return Results.BadRequest(new { error = "The transfer would exceed the destination wallet limit." });
+        var correlation = Guid.NewGuid(); var occurred = request.OccurredAtUtc?.ToUniversalTime() ?? DateTime.UtcNow;
+        db.WalletLedgerEntries.AddRange(
+            new WalletLedgerEntry { OrganizationId = user.OrganizationId!.Value, WalletId = request.FromWalletId, RelatedWalletId = request.ToWalletId, CorrelationId = correlation, Type = "TransferOut", Amount = -request.Amount, Note = Clean(request.Note, 500), CreatedByUserId = user.Id, OccurredAtUtc = occurred },
+            new WalletLedgerEntry { OrganizationId = user.OrganizationId!.Value, WalletId = request.ToWalletId, RelatedWalletId = request.FromWalletId, CorrelationId = correlation, Type = "TransferIn", Amount = request.Amount, Note = Clean(request.Note, 500), CreatedByUserId = user.Id, OccurredAtUtc = occurred });
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletTransferCreated", nameof(WalletLedgerEntry), correlation.ToString(), new { request.FromWalletId, request.ToWalletId, request.Amount, request.Note })); await db.SaveChangesAsync();
+        return Results.Created($"/api/wallet-operations/transfers/{correlation}", new { correlationId = correlation });
+    });
+    operations.MapPost("/reconcile", async (ReconciliationRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users); if (!IsOrganizationAdmin(principal)) return Results.Forbid();
+        var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId);
+        if (wallet is null) return Results.NotFound();
+        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        var adjustments = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        var expected = wallet.OpeningBalance + received + adjustments;
+        var reconciliation = new WalletReconciliation { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, ExpectedBalance = expected, ActualBalance = request.ActualBalance, Variance = request.ActualBalance - expected, Note = Clean(request.Note, 500), CreatedByUserId = user.Id };
+        db.WalletReconciliations.Add(reconciliation); db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WalletReconciled", nameof(WalletReconciliation), reconciliation.Id.ToString(), new { wallet.Id, expected, request.ActualBalance, reconciliation.Variance })); await db.SaveChangesAsync();
+        return Results.Created($"/api/wallet-operations/reconciliations/{reconciliation.Id}", new { reconciliation.Id, reconciliation.ExpectedBalance, reconciliation.ActualBalance, reconciliation.Variance });
+    });
 }
 
 static void MapReports(WebApplication app)
 {
-    app.MapGet("/api/reports/summary", async (DateTime? from, DateTime? to, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    app.MapGet("/api/dashboard", async (ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var organization = await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId);
+        var zone = ResolveTimeZone(organization.TimeZoneId); var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        var start = TimeZoneInfo.ConvertTimeToUtc(localNow.Date, zone); var end = TimeZoneInfo.ConvertTimeToUtc(localNow.Date.AddDays(1), zone);
+        var query = ScopedReceipts(principal, user, db);
+        var today = await query.Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end).GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
+        var latest = await query.OrderByDescending(x => x.ReceivedAtUtc).Take(8).Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { r.Id, r.WalletId, WalletName = w.Name, r.Provider, r.Amount, r.CurrencyCode, r.Sender, r.ReceivedAtUtc }).ToListAsync();
+        return Results.Ok(new { LocalDate = localNow.Date, TimeZone = organization.TimeZoneId, Today = today, Latest = latest });
+    }).RequireAuthorization();
+    app.MapGet("/api/reports/summary", async ([AsParameters] ReportRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanViewReports && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        var start = from?.ToUniversalTime() ?? DateTime.UtcNow.Date.AddDays(-30);
-        var end = to?.ToUniversalTime() ?? DateTime.UtcNow;
-        var query = ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end);
-        var totals = await query.GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
-        var wallets = await query.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
+        var organization = await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId);
+        var zone = ResolveTimeZone(organization.TimeZoneId);
+        var localToday = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone).Date;
+        var start = request.From?.ToUniversalTime() ?? TimeZoneInfo.ConvertTimeToUtc(localToday.AddDays(-29), zone);
+        var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
+        if (end <= start || end - start > TimeSpan.FromDays(366)) return Results.BadRequest(new { error = "Choose a date range between one minute and 366 days." });
+        var query = ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request);
+        var rows = await query.Select(x => new { x.WalletId, x.DeviceId, x.Provider, x.CurrencyCode, x.Amount, x.Sender, x.ReceivedAtUtc }).ToListAsync();
+        var totals = rows.GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount), Average = g.Average(x => x.Amount), Median = Median(g.Select(x => x.Amount)), Maximum = g.Max(x => x.Amount) }).ToList();
+        var wallets = rows.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToList();
         var names = await db.Wallets.Where(x => x.OrganizationId == user.OrganizationId).ToDictionaryAsync(x => x.Id, x => x.Name);
-        var daily = await query.GroupBy(x => new { Day = x.ReceivedAtUtc.Date, x.CurrencyCode }).Select(g => new { g.Key.Day, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderBy(x => x.Day).ToListAsync();
-        return Results.Ok(new { From = start, To = end, Totals = totals, Wallets = wallets.Select(x => new { x.WalletId, WalletName = names.GetValueOrDefault(x.WalletId, "Wallet"), x.CurrencyCode, x.Count, x.Amount }), Daily = daily });
+        var deviceNames = await db.WalletDevices.Where(x => x.OrganizationId == user.OrganizationId).ToDictionaryAsync(x => x.Id, x => x.Name);
+        var localRows = rows.Select(x => new { Row = x, Local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(x.ReceivedAtUtc, DateTimeKind.Utc), zone) }).ToList();
+        var daily = localRows.GroupBy(x => new { Day = x.Local.Date, x.Row.CurrencyCode }).Select(g => new { g.Key.Day, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Row.Amount) }).OrderBy(x => x.Day).ToList();
+        var providers = rows.GroupBy(x => new { x.Provider, x.CurrencyCode }).Select(g => new { g.Key.Provider, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderByDescending(x => x.Amount).ToList();
+        var devices = rows.GroupBy(x => new { x.DeviceId, x.CurrencyCode }).Select(g => new { g.Key.DeviceId, DeviceName = deviceNames.GetValueOrDefault(g.Key.DeviceId, "Device"), g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderByDescending(x => x.Amount).ToList();
+        var hours = localRows.GroupBy(x => new { Hour = x.Local.Hour, x.Row.CurrencyCode }).Select(g => new { g.Key.Hour, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Row.Amount) }).OrderBy(x => x.Hour).ToList();
+        var duration = end - start; var previousStart = start - duration;
+        var previous = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= previousStart && x.ReceivedAtUtc < start), request)
+            .GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
+        var senders = rows.Where(x => !string.IsNullOrWhiteSpace(x.Sender)).Select(x => x.Sender!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var knownBefore = await ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc < start && x.Sender != null && senders.Contains(x.Sender)).Select(x => x.Sender!).Distinct().ToListAsync();
+        var newSenders = senders.Count(sender => !knownBefore.Contains(sender, StringComparer.OrdinalIgnoreCase));
+        var captureQuality = await db.CaptureEvents.Where(x => x.OrganizationId == user.OrganizationId && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end).GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync();
+        var quality = new { MissingSender = rows.Count(x => string.IsNullOrWhiteSpace(x.Sender)), UnmatchedCaptures = captureQuality.Where(x => x.Status == "Unmatched").Sum(x => x.Count), DuplicateCaptures = captureQuality.Where(x => x.Status == "Duplicate").Sum(x => x.Count), RejectedCaptures = captureQuality.Where(x => x.Status == "Rejected").Sum(x => x.Count), FailedUploads = await db.WalletDevices.Where(x => x.OrganizationId == user.OrganizationId).SumAsync(x => x.FailedUploadCount), NewSenders = newSenders, ReturningSenders = senders.Count - newSenders };
+        return Results.Ok(new { From = start, To = end, TimeZone = organization.TimeZoneId, Totals = totals, PreviousTotals = previous, Wallets = wallets.Select(x => new { x.WalletId, WalletName = names.GetValueOrDefault(x.WalletId, "Wallet"), x.CurrencyCode, x.Count, x.Amount }), Daily = daily, Providers = providers, Devices = devices, Hours = hours, Quality = quality });
     }).RequireAuthorization();
-    app.MapGet("/api/reports/export.xlsx", async (DateTime? from, DateTime? to, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    app.MapGet("/api/reports/export.xlsx", async ([AsParameters] ReportRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanExportReports && !IsOrganizationAdmin(principal)) return Results.Forbid();
-        var start = from?.ToUniversalTime() ?? DateTime.UtcNow.Date.AddDays(-30);
-        var end = to?.ToUniversalTime() ?? DateTime.UtcNow;
-        var rows = await ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end)
+        var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-30);
+        var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
+        var rows = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request)
             .Join(db.Wallets, receipt => receipt.WalletId, wallet => wallet.Id, (receipt, wallet) => new { Receipt = receipt, WalletName = wallet.Name })
             .OrderByDescending(x => x.Receipt.ReceivedAtUtc).ToListAsync();
         using var workbook = new XLWorkbook();
@@ -531,6 +1093,12 @@ static void MapReports(WebApplication app)
         }
         sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#E8F7EF");
         sheet.SheetView.FreezeRows(1); sheet.Columns().AdjustToContents();
+        var summary = workbook.Worksheets.Add("Summary");
+        summary.Cell(1, 1).Value = "Wallets Hub report"; summary.Cell(1, 1).Style.Font.Bold = true;
+        summary.Cell(2, 1).Value = "From (UTC)"; summary.Cell(2, 2).Value = start;
+        summary.Cell(3, 1).Value = "To (UTC)"; summary.Cell(3, 2).Value = end;
+        var grouped = rows.GroupBy(x => x.Receipt.CurrencyCode).ToList(); var summaryRow = 5;
+        foreach (var group in grouped) { summary.Cell(summaryRow, 1).Value = group.Key; summary.Cell(summaryRow, 2).Value = group.Count(); summary.Cell(summaryRow, 3).Value = group.Sum(x => x.Receipt.Amount); summaryRow++; }
         using var stream = new MemoryStream(); workbook.SaveAs(stream);
         return Results.File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"wallets-hub-{DateTime.UtcNow:yyyyMMdd}.xlsx");
     }).RequireAuthorization();
@@ -544,10 +1112,15 @@ static async Task SeedAsync(IServiceProvider services, IConfiguration configurat
     var roles = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
     foreach (var role in Roles.All) if (!await roles.RoleExistsAsync(role)) await roles.CreateAsync(new IdentityRole(role));
     var users = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
-    var email = configuration["Seed:PlatformEmail"] ?? "admin@walletshub.local";
-    var password = configuration["Seed:PlatformPassword"] ?? throw new InvalidOperationException("Seed:PlatformPassword is required.");
-    if (await users.FindByEmailAsync(email) is null)
+    var platformRole = await roles.FindByNameAsync(Roles.PlatformAdmin);
+    var existingPlatformAdmin = platformRole is null ? null : await (from user in db.Users
+        join userRole in db.UserRoles on user.Id equals userRole.UserId
+        where userRole.RoleId == platformRole.Id
+        select user).FirstOrDefaultAsync();
+    if (existingPlatformAdmin is null)
     {
+        var email = configuration["Seed:PlatformEmail"] ?? "admin@walletshub.local";
+        var password = configuration["Seed:PlatformPassword"] ?? throw new InvalidOperationException("Seed:PlatformPassword is required.");
         var user = new AppUser { UserName = email, Email = email, EmailConfirmed = true, DisplayName = "Wallets Hub Platform Admin", IsActive = true, VisibleReceiptDays = 3650 };
         var result = await users.CreateAsync(user, password);
         if (!result.Succeeded) throw new InvalidOperationException(string.Join("; ", result.Errors.Select(x => x.Description)));
@@ -565,7 +1138,7 @@ static async Task<AppUser> RequireOrganizationUser(ClaimsPrincipal principal, Us
 static IQueryable<WalletReceipt> ScopedReceipts(ClaimsPrincipal principal, AppUser user, WalletsDbContext db)
 {
     var query = db.WalletReceipts.Where(x => x.OrganizationId == user.OrganizationId);
-    if (!IsOrganizationAdmin(principal)) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.WalletId));
+    if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.WalletId));
     return query.Where(x => x.ReceivedAtUtc >= DateTime.UtcNow.AddDays(-user.VisibleReceiptDays));
 }
 
@@ -576,18 +1149,89 @@ static void ApplyRoleDefaults(AppUser user, string role)
     if (role is Roles.Owner or Roles.Admin)
     {
         user.CanViewReports = user.CanExportReports = user.CanManageDevices = user.CanManageTeam = true;
-        user.VisibleReceiptDays = 3650;
+        user.VisibleReceiptDays = 3650; user.AllWalletAccess = true;
     }
 }
-static async Task SetWalletAccess(WalletsDbContext db, AppUser user, Guid organizationId, IReadOnlyCollection<Guid> walletIds)
+static async Task<string?> SetWalletAccess(WalletsDbContext db, AppUser user, Guid organizationId, bool allWalletAccess, IReadOnlyCollection<Guid> walletIds)
 {
-    var valid = await db.Wallets.Where(x => x.OrganizationId == organizationId && walletIds.Contains(x.Id)).Select(x => x.Id).ToListAsync();
     var old = await db.UserWalletAccess.Where(x => x.UserId == user.Id).ToListAsync();
     db.UserWalletAccess.RemoveRange(old);
-    db.UserWalletAccess.AddRange(valid.Distinct().Select(id => new UserWalletAccess { UserId = user.Id, WalletId = id }));
+    user.AllWalletAccess = allWalletAccess;
+    if (allWalletAccess) return null;
+    var requested = walletIds.Distinct().ToList();
+    var valid = await db.Wallets.Where(x => x.OrganizationId == organizationId && x.IsActive && requested.Contains(x.Id)).Select(x => x.Id).ToListAsync();
+    if (valid.Count != requested.Count) return "One or more selected wallets are invalid or inactive.";
+    db.UserWalletAccess.AddRange(valid.Select(walletId => new UserWalletAccess { UserId = user.Id, WalletId = walletId }));
+    return null;
 }
-static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam };
-static AuditEvent Audit(Guid? organizationId, string? userId, string action, string entityType, string? entityId) => new() { OrganizationId = organizationId, UserId = userId, Action = action, EntityType = entityType, EntityId = entityId };
+static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.AllWalletAccess, user.TwoFactorEnabled };
+static AuditEvent Audit(Guid? organizationId, string? userId, string action, string entityType, string? entityId, object? detail = null) => new() { OrganizationId = organizationId, UserId = userId, Action = action, EntityType = entityType, EntityId = entityId, DetailJson = detail is null ? null : JsonSerializer.Serialize(detail) };
+static async Task<string> GetRole(UserManager<AppUser> users, AppUser user) => (await users.GetRolesAsync(user)).SingleOrDefault() ?? Roles.Employee;
+static async Task<int> ActiveOwnerCount(WalletsDbContext db, Guid organizationId)
+{
+    var ownerRoleId = await db.Roles.Where(x => x.Name == Roles.Owner).Select(x => x.Id).SingleAsync();
+    return await db.Users.CountAsync(x => x.OrganizationId == organizationId && x.IsActive && db.UserRoles.Any(r => r.UserId == x.Id && r.RoleId == ownerRoleId));
+}
+static async Task<string> UniquePairingCode(WalletsDbContext db)
+{
+    for (var attempt = 0; attempt < 20; attempt++)
+    {
+        var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString(); var hash = Hash(code);
+        if (!await db.WalletDevices.AnyAsync(x => x.PairingCodeHash == hash && x.PairingCodeExpiresAtUtc > DateTime.UtcNow)) return code;
+    }
+    throw new InvalidOperationException("Could not create a unique pairing code.");
+}
+static async Task<WalletDevice?> DeviceFromToken(HttpContext http, WalletsDbContext db)
+{
+    var token = http.Request.Headers["X-Wallet-Device-Token"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(token)) return null; var tokenHash = Hash(token);
+    return await db.WalletDevices.SingleOrDefaultAsync(x => x.TokenHash == tokenHash && x.IsActive);
+}
+static async Task QueueCaptureIssueNotifications(WalletsDbContext db, WalletDevice device, CaptureEvent capture)
+{
+    var recipients = await db.Users.Where(x => x.OrganizationId == device.OrganizationId && x.IsActive && x.CanManageDevices).Select(x => x.Id).ToListAsync();
+    foreach (var userId in recipients)
+        db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = userId, Title = "Capture needs attention", Body = $"{device.Name}: {capture.Reason.Replace('-', ' ')}.", Link = "/capture-health", SourceId = capture.Id });
+}
+static IQueryable<WalletReceipt> ApplyReportFilters(IQueryable<WalletReceipt> query, ReportRequest request)
+{
+    var walletIds = ParseGuids(request.WalletIds); if (request.WalletId.HasValue) walletIds.Add(request.WalletId.Value);
+    if (walletIds.Count > 0) query = query.Where(x => walletIds.Contains(x.WalletId));
+    if (request.DeviceId.HasValue) query = query.Where(x => x.DeviceId == request.DeviceId);
+    if (!string.IsNullOrWhiteSpace(request.Provider)) query = query.Where(x => x.Provider == request.Provider);
+    if (!string.IsNullOrWhiteSpace(request.Currency)) query = query.Where(x => x.CurrencyCode == request.Currency.ToUpper());
+    if (request.MinAmount.HasValue) query = query.Where(x => x.Amount >= request.MinAmount);
+    if (request.MaxAmount.HasValue) query = query.Where(x => x.Amount <= request.MaxAmount);
+    if (request.MissingSender == true) query = query.Where(x => x.Sender == null || x.Sender == "");
+    if (request.MissingReference == true) query = query.Where(x => x.ProviderReference == null || x.ProviderReference == "");
+    if (!string.IsNullOrWhiteSpace(request.Search))
+    {
+        var pattern = $"%{EscapeLike(request.Search.Trim())}%";
+        query = query.Where(x => EF.Functions.ILike(x.Sender ?? "", pattern) || EF.Functions.ILike(x.ProviderReference ?? "", pattern) || EF.Functions.ILike(x.Provider, pattern));
+    }
+    return query;
+}
+static decimal Median(IEnumerable<decimal> values)
+{
+    var sorted = values.Order().ToArray(); if (sorted.Length == 0) return 0;
+    var middle = sorted.Length / 2; return sorted.Length % 2 == 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+}
+static async Task<decimal> WalletBalance(WalletsDbContext db, Wallet wallet)
+{
+    var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+    var ledger = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+    return wallet.OpeningBalance + received + ledger;
+}
+static TimeZoneInfo ResolveTimeZone(string id)
+{
+    try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+    catch (TimeZoneNotFoundException) when (id == "Africa/Cairo") { return TimeZoneInfo.FindSystemTimeZoneById("Egypt Standard Time"); }
+}
+static HashSet<Guid> ParseGuids(string? value) => string.IsNullOrWhiteSpace(value) ? [] : value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => Guid.TryParse(x, out var id) ? id : Guid.Empty).Where(x => x != Guid.Empty).ToHashSet();
+static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+static string MaskSensitive(string value) => System.Text.RegularExpressions.Regex.Replace(value, @"(?<!\d)(\+?20)?(01\d{2})\d{4}(\d{3})(?!\d)", "$2****$3");
+static string? Clean(string? value, int maxLength) { var clean = value?.Trim(); return string.IsNullOrWhiteSpace(clean) ? null : clean[..Math.Min(clean.Length, maxLength)]; }
+static string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim() ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 static string NormalizeAccount(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
 static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", "USD" => "USD", "USDT" => "USDT", _ => throw new BadHttpRequestException("Currency must be EGP, USD, or USDT.") };
@@ -600,15 +1244,38 @@ static void ValidateProviderCurrency(string provider, string currency)
 static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries).Select(part => new string(part.Where(char.IsLetterOrDigit).ToArray())).Where(part => part.Length > 0));
 static string Unprotect(IDataProtector protector, string value) { try { return protector.Unprotect(value); } catch { return "Message unavailable"; } }
 
-public sealed record LoginRequest(string Email, string Password);
+public sealed record LoginRequest(string Email, string Password, string? TwoFactorCode = null);
+public sealed record AccountUpdateRequest(string DisplayName, string Email, string CurrentPassword, string? NewPassword);
+public sealed record MfaCodeRequest(string Code);
+public sealed record PasswordRequest(string Password);
 public sealed record PlatformAccountUpdateRequest(string Email, string CurrentPassword, string? NewPassword);
 public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword);
+public sealed record PlatformOwnerPasswordResetRequest(string OwnerEmail, string NewPassword);
 public sealed record ToggleRequest(bool Enabled);
-public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
-public sealed record UpdateTeamAccessRequest(bool IsActive, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, IReadOnlyCollection<Guid> WalletIds);
-public sealed record WalletRequest(string Name, string Provider, string AccountNumber, string CurrencyCode, Guid? DeviceId, bool IsActive = true);
+public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
+public sealed record UpdateTeamMemberRequest(string DisplayName, string Email, string Role, bool IsActive, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
+public sealed record ResetPasswordRequest(string NewPassword);
+public sealed record WalletRequest(string Name, string Provider, string AccountNumber, string CurrencyCode, Guid? DeviceId, bool IsActive = true, decimal OpeningBalance = 0, decimal? BalanceLimit = null);
 public sealed record DevicePairingRequest(string Name);
 public sealed record PairDeviceRequest(string PairingCode, string InstallationId);
+public sealed record UpdateDeviceRequest(string Name, bool IsActive);
+public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidVersion, int PendingUploadCount, int FailedUploadCount, bool SmsPermissionGranted, bool NotificationPermissionGranted, bool BatteryOptimizationIgnored, DateTime? LastSmsAtUtc, DateTime? LastNotificationAtUtc);
 public sealed record CaptureRequest(Guid? WalletId, string? SourcePackage, string? Title, string? Body, DateTime ReceivedAtUtc, string Fingerprint);
 public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
 public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
+public sealed record WorkspaceSettingsRequest(string TimeZoneId, bool MaskSensitiveMessages);
+public sealed record ResolveCaptureRequest(Guid WalletId);
+public sealed record LedgerEntryRequest(Guid WalletId, string Type, decimal Amount, string? Note, DateTime? OccurredAtUtc);
+public sealed record WalletTransferRequest(Guid FromWalletId, Guid ToWalletId, decimal Amount, string? Note, DateTime? OccurredAtUtc);
+public sealed record ReconciliationRequest(Guid WalletId, decimal ActualBalance, string? Note);
+public sealed class StatementRequest { public Guid WalletId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }
+public sealed class ReceiptSearchRequest
+{
+    public DateTime? From { get; set; } public DateTime? To { get; set; } public Guid? WalletId { get; set; } public string? WalletIds { get; set; }
+    public string? Provider { get; set; } public string? Currency { get; set; } public Guid? DeviceId { get; set; } public decimal? MinAmount { get; set; } public decimal? MaxAmount { get; set; }
+    public string? Search { get; set; } public string? SearchMode { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } public string? Sort { get; set; }
+    public int? Page { get; set; } public int? PageSize { get; set; }
+}
+public sealed class CaptureEventSearchRequest { public string? Status { get; set; } public string? Reason { get; set; } public Guid? DeviceId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }
+public sealed class AuditSearchRequest { public string? Action { get; set; } public string? UserId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }
+public sealed class ReportRequest { public DateTime? From { get; set; } public DateTime? To { get; set; } public Guid? WalletId { get; set; } public string? WalletIds { get; set; } public Guid? DeviceId { get; set; } public string? Provider { get; set; } public string? Currency { get; set; } public decimal? MinAmount { get; set; } public decimal? MaxAmount { get; set; } public string? Search { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } }

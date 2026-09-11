@@ -36,14 +36,13 @@ public class WalletNotificationListener extends NotificationListenerService {
         CharSequence[] lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES); if (lines != null) for (CharSequence line : lines) append(body, line);
         Parcelable[] bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES);
         if (bundles != null) for (Notification.MessagingStyle.Message message : Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)) append(body, message.getText());
-        String title = text(extras.getCharSequence(Notification.EXTRA_TITLE)); String content = (title + " " + body + " " + notification.getPackageName()).toLowerCase(Locale.ROOT);
-        boolean binance = content.contains("binance");
-        if (!binance || !content.contains("usdt")) return;
+        String title = text(extras.getCharSequence(Notification.EXTRA_TITLE));
+        if (!WalletCaptureClassifier.isBinanceCandidate(notification.getPackageName(), title, body.toString())) return;
         WalletCapturePlugin.prefs(this).edit().putLong(WalletCapturePlugin.LAST_WALLET_MATCH_AT, System.currentTimeMillis()).apply();
         String fingerprint = sha256(notification.getPackageName() + "|" + notification.getPostTime() + "|" + notification.getKey() + "|" + title + "|" + body);
         Data input = new Data.Builder().putString("sourcePackage", notification.getPackageName()).putString("title", title).putString("body", body.toString()).putString("receivedAtUtc", utc(notification.getPostTime())).putString("fingerprint", fingerprint).build();
         Constraints constraints = new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build();
-        OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).build();
+        OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).addTag("wallet-upload").build();
         WorkManager.getInstance(this).enqueueUniqueWork("wallet-" + fingerprint, ExistingWorkPolicy.KEEP, work);
     }
     private static void append(StringBuilder builder, CharSequence value) { String next = text(value).trim(); if (next.isEmpty()) return; if (builder.length() > 0) builder.append('\n'); builder.append(next); }

@@ -33,24 +33,17 @@ public class WalletSmsReceiver extends BroadcastReceiver {
     static boolean capture(Context context, String sender, String body, long receivedAt) {
         if (!WalletCapturePlugin.prefs(context).contains(WalletCapturePlugin.DEVICE_TOKEN)) return false;
         WalletCapturePlugin.prefs(context).edit().putLong(WalletCapturePlugin.LAST_SMS_AT, System.currentTimeMillis()).apply();
-        String content = (text(sender) + " " + text(body)).toLowerCase(Locale.ROOT);
-        boolean vodafone = any(content, "vodafone cash", "vf cash", "فودافون كاش", "vf.eg/vfcash") ||
-            (content.contains("تم استلام مبلغ") && content.contains("من رقم") && content.contains("محفظتك") && content.contains("رقم العملية"));
-        boolean instapay = any(content, "instapay", "insta pay", "انستاباي", "إنستاباي");
-        boolean instantTransfer = any(content, "تحويل لحظي", "تحويل لحظى", "تحويل فوري", "instant transfer", "instant payment", " ipn ")
-            || (content.contains("19623") && any(content, "تم إضافة", "تم اضافه", "تحويل"));
-        if (!(vodafone || instapay || instantTransfer)) return false;
+        if (!WalletCaptureClassifier.isSmsCandidate(sender, body)) return false;
         WalletCapturePlugin.prefs(context).edit().putLong(WalletCapturePlugin.LAST_WALLET_MATCH_AT, System.currentTimeMillis()).apply();
         String fingerprint = sha256("android.sms|" + receivedAt + "|" + text(sender) + "|" + text(body));
         Data input = new Data.Builder().putString("sourcePackage", "android.sms").putString("title", text(sender))
             .putString("body", text(body)).putString("receivedAtUtc", utc(receivedAt)).putString("fingerprint", fingerprint).build();
         Constraints constraints = new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build();
-        OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).build();
+        OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(WalletCaptureWorker.class).setInputData(input).setConstraints(constraints).addTag("wallet-upload").build();
         WorkManager.getInstance(context).enqueueUniqueWork("wallet-" + fingerprint, ExistingWorkPolicy.KEEP, work);
         return true;
     }
 
-    private static boolean any(String value, String... markers) { for (String marker : markers) if (value.contains(marker)) return true; return false; }
     private static String text(String value) { return value == null ? "" : value; }
     private static String utc(long time) { SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT); format.setTimeZone(TimeZone.getTimeZone("UTC")); return format.format(new Date(time)); }
     private static String sha256(String value) { try { byte[] bytes=MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte item:bytes)result.append(String.format(Locale.ROOT,"%02X",item));return result.toString(); } catch(Exception ex){return Integer.toHexString(value.hashCode());} }

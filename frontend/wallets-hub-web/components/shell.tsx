@@ -5,10 +5,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
+  Activity,
   Bell,
   Building2,
   CircleDollarSign,
+  ClipboardList,
   LayoutDashboard,
+  Landmark,
+  LockKeyhole,
   LogOut,
   Menu,
   Settings2,
@@ -25,9 +29,12 @@ const organizationLinks = [
   ["/dashboard", "Overview", LayoutDashboard],
   ["/receipts", "Received money", CircleDollarSign],
   ["/wallets", "Wallets", WalletCards],
+  ["/wallet-operations", "Balances", Landmark],
   ["/devices", "Devices", Smartphone],
+  ["/capture-health", "Capture inbox", Activity],
   ["/team", "Team & access", Users],
   ["/reports", "Reports", BarChart3],
+  ["/audit", "Audit trail", ClipboardList],
   ["/notifications", "Notifications", Bell],
   ["/settings", "Settings", Settings2],
 ] as const;
@@ -42,11 +49,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
     queryKey: ["me"],
     queryFn: () => api<User>("/api/auth/me"),
   });
+  const notifications = useQuery({
+    queryKey: ["notifications", "badge"],
+    queryFn: () => api<{ unreadCount: number }>("/api/notifications"),
+    enabled: Boolean(me.data && me.data.role !== "PlatformAdmin"),
+    refetchInterval: 20_000,
+  });
   const accountLinks =
     me.data?.role === "PlatformAdmin"
       ? [
           ["/platform", "Client organizations", Building2] as const,
           ["/platform/account", "Account settings", Settings2] as const,
+          ["/platform/security", "Security", LockKeyhole] as const,
         ]
       : organizationLinks.filter(([href]) => {
           if (href === "/team")
@@ -61,6 +75,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
               me.data?.role === "Admin" ||
               me.data?.canManageDevices
             );
+          if (href === "/capture-health")
+            return (
+              me.data?.role === "Owner" ||
+              me.data?.role === "Admin" ||
+              me.data?.canManageDevices
+            );
+          if (href === "/audit") return me.data?.role === "Owner" || me.data?.role === "Admin";
           if (href === "/reports")
             return (
               me.data?.role === "Owner" ||
@@ -128,11 +149,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <section className="workspace">
+        {me.data?.role !== "PlatformAdmin" && <header className="desktop-toolbar"><div><span className="status-dot"/>Live capture</div><Link className="notification-button" href="/notifications" title="Notifications"><Bell size={20}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link></header>}
         <header className="mobile-bar">
           <button className="icon-button" onClick={() => setOpen(true)}>
             <Menu />
           </button>
           <strong>Wallets Hub</strong>
+          {me.data?.role !== "PlatformAdmin" && <Link className="notification-button" href="/notifications" title="Notifications"><Bell size={19}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link>}
           {native && <Link className="icon-button" style={{ marginLeft: "auto" }} href="/pair-device" title="This phone capture status"><Smartphone size={19}/></Link>}
         </header>
         <main>{children}</main>

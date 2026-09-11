@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.Telephony;
 import android.service.notification.NotificationListenerService;
@@ -36,6 +37,8 @@ public class WalletCapturePlugin extends Plugin {
     static final String LAST_NOTIFICATION_AT = "last_notification_at";
     static final String LAST_WALLET_MATCH_AT = "last_wallet_match_at";
     static final String LAST_SMS_AT = "last_sms_at";
+    static final String PENDING_UPLOADS = "pending_uploads";
+    static final String FAILED_UPLOADS = "failed_uploads";
 
     static SharedPreferences prefs(Context context) { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
     static String installationId(Context context) {
@@ -61,7 +64,10 @@ public class WalletCapturePlugin extends Plugin {
         result.put("lastNotificationAt", preferences.getLong(LAST_NOTIFICATION_AT, 0));
         result.put("lastSmsAt", preferences.getLong(LAST_SMS_AT, 0));
         result.put("lastWalletMatchAt", preferences.getLong(LAST_WALLET_MATCH_AT, 0));
+        PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        result.put("batteryOptimizationIgnored", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
         if (access && preferences.contains(DEVICE_TOKEN)) NotificationListenerService.requestRebind(new ComponentName(getContext(), WalletNotificationListener.class));
+        if (preferences.contains(DEVICE_TOKEN)) WalletHeartbeatWorker.schedule(getContext());
         call.resolve(result);
     }
 
@@ -70,6 +76,7 @@ public class WalletCapturePlugin extends Plugin {
         String deviceId = call.getString("deviceId"); String token = call.getString("deviceToken");
         if (deviceId == null || token == null) { call.reject("Pairing response is incomplete."); return; }
         prefs(getContext()).edit().putString(DEVICE_ID, deviceId).putString(DEVICE_TOKEN, token).putString(API_URL, "https://servicehub.ink/wallets").apply();
+        WalletHeartbeatWorker.schedule(getContext());
         call.resolve();
     }
 
@@ -94,12 +101,18 @@ public class WalletCapturePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void openBatterySettings(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); getContext().startActivity(intent); call.resolve();
+    }
+
+    @PluginMethod
     public void scanRecentSms(PluginCall call) {
         if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             call.reject("SMS access is required."); return;
         }
         int checked = 0; int matched = 0;
-        long cutoff = System.currentTimeMillis() - 2L * 24 * 60 * 60 * 1000;
+        long cutoff = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000;
         String[] columns = { Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE };
         try (Cursor cursor = getContext().getContentResolver().query(
             Telephony.Sms.Inbox.CONTENT_URI, columns, Telephony.Sms.DATE + " >= ?",

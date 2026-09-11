@@ -209,6 +209,7 @@ export default function PairDevicePage() {
                 ok={Boolean(status.lastWalletMatchAt)}
                 value={time(status.lastWalletMatchAt)}
               />
+              <StatusRow label="Battery optimization" ok={status.batteryOptimizationIgnored} value={status.batteryOptimizationIgnored ? "Unrestricted" : "Needs attention"}/>
             </div>
             {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
             {smsResult && <div className="notice" style={{ marginTop: 12 }}>{smsResult}</div>}
@@ -224,9 +225,10 @@ export default function PairDevicePage() {
             )}
             {status.smsAccess && (
               <button className="btn btn-secondary btn-wide" style={{ marginTop: 12 }} disabled={busy} onClick={scanSms}>
-                Scan SMS from the last 2 days
+                Scan SMS from the last 30 days
               </button>
             )}
+            {!status.batteryOptimizationIgnored && <div className="notice" style={{ marginTop: 14 }}><strong>Keep capture reliable:</strong> set Wallets Hub battery use to Unrestricted so Android does not stop background SMS uploads.<button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openBatterySettings()}>Open battery settings</button></div>}
             {!status.notificationAccess && (
               <>
                 <div className="notice" style={{ marginTop: 14 }}>
