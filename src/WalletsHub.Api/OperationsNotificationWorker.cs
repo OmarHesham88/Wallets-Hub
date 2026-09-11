@@ -36,7 +36,7 @@ public sealed class OperationsNotificationWorker(IServiceScopeFactory scopeFacto
         var organizations = await db.Organizations.AsNoTracking().Where(x => x.IsActive).ToListAsync(cancellationToken);
         foreach (var organization in organizations)
         {
-            var zone = TimeZone(organization.TimeZoneId); var localNow = TimeZoneInfo.ConvertTimeFromUtc(now, zone);
+            var zone = TimeZoneResolver.Resolve(organization.TimeZoneId); var localNow = TimeZoneInfo.ConvertTimeFromUtc(now, zone);
             if (localNow.TimeOfDay < TimeSpan.FromMinutes(5)) continue;
             var reportDate = localNow.Date.AddDays(-1);
             var localStart = DateTime.SpecifyKind(reportDate, DateTimeKind.Unspecified);
@@ -70,9 +70,4 @@ public sealed class OperationsNotificationWorker(IServiceScopeFactory scopeFacto
         return users.Where(user => preferences.FirstOrDefault(x => x.UserId == user.Id) is not { } preference || enabled(preference)).ToList();
     }
 
-    private static TimeZoneInfo TimeZone(string id)
-    {
-        try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
-        catch (TimeZoneNotFoundException) when (id == "Africa/Cairo") { return TimeZoneInfo.FindSystemTimeZoneById("Egypt Standard Time"); }
-    }
 }

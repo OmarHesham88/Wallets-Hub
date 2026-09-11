@@ -1222,11 +1222,7 @@ static async Task<decimal> WalletBalance(WalletsDbContext db, Wallet wallet)
     var ledger = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
     return wallet.OpeningBalance + received + ledger;
 }
-static TimeZoneInfo ResolveTimeZone(string id)
-{
-    try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
-    catch (TimeZoneNotFoundException) when (id == "Africa/Cairo") { return TimeZoneInfo.FindSystemTimeZoneById("Egypt Standard Time"); }
-}
+static TimeZoneInfo ResolveTimeZone(string id) => TimeZoneResolver.Resolve(id);
 static HashSet<Guid> ParseGuids(string? value) => string.IsNullOrWhiteSpace(value) ? [] : value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => Guid.TryParse(x, out var id) ? id : Guid.Empty).Where(x => x != Guid.Empty).ToHashSet();
 static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 static string MaskSensitive(string value) => System.Text.RegularExpressions.Regex.Replace(value, @"(?<!\d)(\+?20)?(01\d{2})\d{4}(\d{3})(?!\d)", "$2****$3");
