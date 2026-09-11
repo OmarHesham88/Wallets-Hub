@@ -62,7 +62,13 @@ jobs:
           tar -xzf /tmp/walletshub-source.tar.gz -C "$HOME/walletshub"
           gzip -dc /tmp/walletshub-images.tar.gz | docker load
           cd "$HOME/walletshub"
-          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --remove-orphans
+          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --remove-orphans --force-recreate
+          api_container="$(docker compose --env-file .env.production -f docker-compose.production.yml ps -q walletshub-api)"
+          web_container="$(docker compose --env-file .env.production -f docker-compose.production.yml ps -q walletshub-web)"
+          test -n "$api_container"
+          test -n "$web_container"
+          test "$(docker inspect --format '{{.Image}}' "$api_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-api:latest)"
+          test "$(docker inspect --format '{{.Image}}' "$web_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-web:latest)"
           for attempt in $(seq 1 36); do
             if curl --fail --silent --show-error https://servicehub.ink/wallets/login >/dev/null; then
               rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz
