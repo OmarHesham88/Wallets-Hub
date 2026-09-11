@@ -69,8 +69,11 @@ jobs:
           test -n "$web_container"
           test "$(docker inspect --format '{{.Image}}' "$api_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-api:latest)"
           test "$(docker inspect --format '{{.Image}}' "$web_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-web:latest)"
+          caddy_container="$(docker ps --filter label=com.docker.compose.service=caddy --format '{{.ID}}' | head -n 1)"
+          test -n "$caddy_container"
+          docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
           for attempt in $(seq 1 36); do
-            if curl --fail --silent --show-error https://servicehub.ink/wallets/login >/dev/null; then
+            if curl --fail --silent --show-error https://servicehub.ink/wallets/capture-health >/dev/null; then
               rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz
               exit 0
             fi
