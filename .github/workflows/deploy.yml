@@ -53,7 +53,7 @@ jobs:
             cd "$HOME/walletshub"
             docker compose --env-file .env.production -f docker-compose.production.yml exec -T walletshub-db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 > "$backup"
             keys="${backup%.sql.gz}.keys.tar.gz"
-            docker compose --env-file .env.production -f docker-compose.production.yml run -T --interactive=false --rm --no-deps walletshub-keys-init tar -czf - -C /keys . > "$keys"
+            docker compose --env-file .env.production -f docker-compose.production.yml run -T --interactive=false --rm --no-deps walletshub-keys-init tar -czf - -C /keys . < /dev/null > "$keys"
             test -s "$backup"
             test -s "$keys"
             find "$HOME/walletshub-backups" -type f \( -name '*.sql.gz' -o -name '*.keys.tar.gz' \) -mtime +30 -delete
