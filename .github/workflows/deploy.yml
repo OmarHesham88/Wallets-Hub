@@ -37,49 +37,11 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: scp -i "$HOME/.ssh/walletshub_deploy" /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
+        run: |
+          scp -i "$HOME/.ssh/walletshub_deploy" /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
+          scp -i "$HOME/.ssh/walletshub_deploy" ops/deploy-production.sh "$DEPLOY_USER@$DEPLOY_HOST:/tmp/walletshub-deploy.sh"
       - name: Deploy isolated application
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          install -d "$HOME/walletshub"
-          test -f "$HOME/walletshub/.env.production" || { echo "$HOME/walletshub/.env.production is required"; exit 1; }
-          if test -f "$HOME/walletshub/docker-compose.production.yml"; then
-            install -d -m 700 "$HOME/walletshub-backups"
-            backup="$HOME/walletshub-backups/pre-deploy-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
-            cd "$HOME/walletshub"
-            docker compose --env-file .env.production -f docker-compose.production.yml exec -T walletshub-db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 > "$backup"
-            keys="${backup%.sql.gz}.keys.tar.gz"
-            docker run --rm --volume walletshub_walletshub-keys:/keys:ro alpine:3.22 tar -czf - -C /keys . > "$keys"
-            test -s "$backup"
-            test -s "$keys"
-            find "$HOME/walletshub-backups" -type f \( -name '*.sql.gz' -o -name '*.keys.tar.gz' \) -mtime +30 -delete
-          fi
-          find "$HOME/walletshub" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password -exec rm -rf -- {} +
-          tar -xzf /tmp/walletshub-source.tar.gz -C "$HOME/walletshub"
-          gzip -dc /tmp/walletshub-images.tar.gz | docker load
-          cd "$HOME/walletshub"
-          docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --remove-orphans --force-recreate
-          api_container="$(docker compose --env-file .env.production -f docker-compose.production.yml ps -q walletshub-api)"
-          web_container="$(docker compose --env-file .env.production -f docker-compose.production.yml ps -q walletshub-web)"
-          test -n "$api_container"
-          test -n "$web_container"
-          test "$(docker inspect --format '{{.Image}}' "$api_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-api:latest)"
-          test "$(docker inspect --format '{{.Image}}' "$web_container")" = "$(docker image inspect --format '{{.Id}}' walletshub-web:latest)"
-          caddy_container="$(docker ps --filter label=com.docker.compose.service=caddy --format '{{.ID}}' | head -n 1)"
-          test -n "$caddy_container"
-          docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-          for attempt in $(seq 1 36); do
-            if curl --fail --silent --show-error https://servicehub.ink/wallets/capture-health >/dev/null; then
-              rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz
-              exit 0
-            fi
-            sleep 5
-          done
-          cd "$HOME/walletshub"
-          docker compose --env-file .env.production -f docker-compose.production.yml ps
-          exit 1
-          REMOTE
+        run: ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" 'bash /tmp/walletshub-deploy.sh'
