@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.next/
+**/android/.gradle/
+**/android/app/build/
+.git/
+.github/
+*.apk
+*.tar.gz
