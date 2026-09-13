@@ -19,6 +19,10 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet test WalletsHub.slnx --configuration Release
+      - name: Verify production image timezone support
+        run: |
+          docker build --file src/WalletsHub.Api/Dockerfile --tag walletshub-api:test .
+          docker run --rm --entrypoint sh walletshub-api:test -c 'test -f /usr/share/zoneinfo/Africa/Cairo'
 
   frontend:
     runs-on: ubuntu-latest
