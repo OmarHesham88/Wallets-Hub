@@ -44,7 +44,7 @@ public sealed class OperationsNotificationWorker(IServiceScopeFactory scopeFacto
             var recipients = await ActiveNotificationRecipients(db, organization.Id, preference => preference.DailySummary, requireDeviceAccess: false, cancellationToken);
             foreach (var recipient in recipients)
             {
-                var receiptQuery = db.WalletReceipts.Where(x => x.OrganizationId == organization.Id && x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end);
+                var receiptQuery = db.WalletReceipts.Where(x => x.OrganizationId == organization.Id && x.Status == ReceiptStatus.Confirmed && x.CurrencyCode == "EGP" && x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end);
                 if (!recipient.AllWalletAccess)
                     receiptQuery = receiptQuery.Where(x => db.UserWalletAccess.Any(access => access.UserId == recipient.Id && access.WalletId == x.WalletId));
                 var totals = await receiptQuery.GroupBy(x => x.CurrencyCode).Select(group => new { Currency = group.Key, Count = group.Count(), Amount = group.Sum(x => x.Amount) }).ToListAsync(cancellationToken);

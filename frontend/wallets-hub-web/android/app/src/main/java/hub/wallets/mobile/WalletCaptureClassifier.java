@@ -15,11 +15,6 @@ public final class WalletCaptureClassifier {
         return vodafone || instaPay || instantTransfer;
     }
 
-    public static boolean isBinanceCandidate(String packageName, String title, String body) {
-        String content = (text(packageName) + " " + text(title) + " " + text(body)).toLowerCase(Locale.ROOT);
-        return content.contains("binance") && content.contains("usdt");
-    }
-
     private static boolean any(String value, String... markers) { for (String marker : markers) if (value.contains(marker)) return true; return false; }
     private static String text(String value) { return value == null ? "" : value; }
 }

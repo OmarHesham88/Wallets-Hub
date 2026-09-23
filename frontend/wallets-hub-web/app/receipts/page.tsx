@@ -1,23 +1,30 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Bookmark, CheckCircle2, ChevronDown, Download, FilterX, Search, ShieldCheck, SlidersHorizontal, WalletCards } from "lucide-react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bookmark, Check, CheckCircle2, ChevronDown, Download, FilterX, LayoutGrid, List, Search, ShieldCheck, SlidersHorizontal, WalletCards, X } from "lucide-react";
 import { Shell } from "@/components/shell";
-import { api, appPath, money, queryString } from "@/lib/api";
+import { api, appPath, money, queryString, User } from "@/lib/api";
 
-type Receipt = { id: string; walletId: string; walletName: string; deviceId: string; deviceName: string; provider: string; amount: number; currencyCode: string; sender?: string; providerReference?: string; message: string; receivedAtUtc: string };
+type Receipt = { id: string; walletId: string; walletName: string; deviceId: string; deviceName: string; provider: string; amount: number; currencyCode: string; sender?: string; providerReference?: string; status: "Pending" | "Confirmed"; message: string; receivedAtUtc: string };
 type Page<T> = { items: T[]; total: number; page: number; pageSize: number; totalPages: number };
 type Wallet = { id: string; name: string };
 type Device = { id: string; name: string };
-type Filters = { search: string; searchMode: string; walletIds: string; provider: string; currency: string; deviceId: string; from: string; to: string; minAmount: string; maxAmount: string; missingSender: boolean; missingReference: boolean; sort: string };
+type Filters = { search: string; searchMode: string; walletIds: string; provider: string; deviceId: string; status: string; from: string; to: string; minAmount: string; maxAmount: string; missingSender: boolean; missingReference: boolean; sort: string };
+type Workspace = { requireReceiptConfirmation: boolean };
 
-const empty: Filters = { search: "", searchMode: "partial", walletIds: "", provider: "", currency: "", deviceId: "", from: "", to: "", minAmount: "", maxAmount: "", missingSender: false, missingReference: false, sort: "newest" };
+const empty: Filters = { search: "", searchMode: "partial", walletIds: "", provider: "", deviceId: "", status: "", from: "", to: "", minAmount: "", maxAmount: "", missingSender: false, missingReference: false, sort: "newest" };
 
 export default function ReceiptsPage() {
+  const client = useQueryClient();
   const [filters, setFilters] = useState<Filters>(empty);
   const [page, setPage] = useState(1);
+  const [view, setViewState] = useState<"cards" | "list">("cards");
+  useEffect(() => { const timer = window.setTimeout(() => setViewState(localStorage.getItem("walletshub.receiptView") === "list" ? "list" : "cards"), 0); return () => window.clearTimeout(timer); }, []);
+  function setView(next: "cards" | "list") { setViewState(next); localStorage.setItem("walletshub.receiptView", next); }
   const deferredSearch = useDeferredValue(filters.search);
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/api/auth/me") });
+  const workspace = useQuery({ queryKey: ["workspace-settings"], queryFn: () => api<Workspace>("/api/settings/workspace") });
   const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => api<Wallet[]>("/api/wallets") });
   const devices = useQuery({ queryKey: ["devices", "receipt-filter"], queryFn: () => api<Device[]>("/api/devices"), retry: false });
   const params = useMemo(() => ({
@@ -29,9 +36,11 @@ export default function ReceiptsPage() {
     pageSize: 30,
   }), [deferredSearch, filters, page]);
   const receipts = useQuery({ queryKey: ["receipts", params], queryFn: () => api<Page<Receipt>>(`/api/receipts${queryString(params)}`), refetchInterval: 15_000, placeholderData: (previous) => previous });
+  const confirm = useMutation({ mutationFn: (id: string) => api(`/api/receipts/${id}/confirm`, { method: "POST" }), onSuccess: () => { client.invalidateQueries({ queryKey: ["receipts"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["report-summary"] }); client.invalidateQueries({ queryKey: ["wallet-operations"] }); client.invalidateQueries({ queryKey: ["wallets"] }); } });
+  const canConfirm = ["Owner", "Admin"].includes(me.data?.role ?? "") || Boolean(me.data?.canConfirmReceipts);
   const selectedWalletIds = filters.walletIds ? filters.walletIds.split(",") : [];
   const advancedCount = [filters.from, filters.to, filters.minAmount, filters.maxAmount, filters.missingSender, filters.missingReference, filters.sort !== "newest"].filter(Boolean).length;
-  const activeCount = [filters.search, filters.walletIds, filters.provider, filters.currency, filters.deviceId].filter(Boolean).length + advancedCount;
+  const activeCount = [filters.search, filters.walletIds, filters.provider, filters.deviceId, filters.status].filter(Boolean).length + advancedCount;
 
   function set<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -45,9 +54,9 @@ export default function ReceiptsPage() {
   }
 
   function clearFilters() { setFilters(empty); setPage(1); }
-  function saveView() { localStorage.setItem("walletshub.receiptFilters.v1", JSON.stringify(filters)); window.alert("This filter view was saved on this device."); }
-  function loadView() { try { const saved = JSON.parse(localStorage.getItem("walletshub.receiptFilters.v1") ?? "null") as Filters | null; if (saved) { setFilters({ ...empty, ...saved }); setPage(1); } } catch { localStorage.removeItem("walletshub.receiptFilters.v1"); } }
-  const exportParams = queryString({ from: params.from, to: params.to, walletIds: filters.walletIds, provider: filters.provider, currency: filters.currency, deviceId: filters.deviceId, minAmount: filters.minAmount, maxAmount: filters.maxAmount, search: filters.search, missingSender: filters.missingSender || "", missingReference: filters.missingReference || "" });
+  function saveView() { localStorage.setItem("walletshub.receiptFilters.v2", JSON.stringify(filters)); window.alert("This filter view was saved on this device."); }
+  function loadView() { try { const saved = JSON.parse(localStorage.getItem("walletshub.receiptFilters.v2") ?? "null") as Filters | null; if (saved) { setFilters({ ...empty, ...saved }); setPage(1); } } catch { localStorage.removeItem("walletshub.receiptFilters.v2"); } }
+  const exportParams = queryString({ from: params.from, to: params.to, walletIds: filters.walletIds, provider: filters.provider, currency: "EGP", deviceId: filters.deviceId, minAmount: filters.minAmount, maxAmount: filters.maxAmount, search: filters.search, missingSender: filters.missingSender || "", missingReference: filters.missingReference || "" });
 
   const walletLabel = selectedWalletIds.length === 0
     ? "All wallets"
@@ -56,7 +65,12 @@ export default function ReceiptsPage() {
       : `${selectedWalletIds.length} wallets`;
 
   return <Shell>
-    <div className="page-head"><div><span className="eyebrow">Received payments</span><h1>Received money</h1><p>Search and export confirmed receipts with fast, precise filters.</p></div><div className="button-row"><button className="btn btn-secondary" onClick={loadView}><Bookmark size={17}/>Load saved</button><button className="btn btn-secondary" onClick={saveView}><Bookmark size={17}/>Save view</button><a className="btn" href={appPath(`/api/reports/export.xlsx${exportParams}`)}><Download size={17}/>Export results</a></div></div>
+    <div className="page-head"><div><span className="eyebrow">Received payments</span><h1>Received money</h1><p>{workspace.data?.requireReceiptConfirmation ? "Review pending payments and search every received EGP payment." : "Search every received EGP payment with fast, precise filters."}</p></div><div className="button-row"><button className="btn btn-secondary" onClick={loadView}><Bookmark size={17}/>Load saved</button><button className="btn btn-secondary" onClick={saveView}><Bookmark size={17}/>Save view</button><a className="btn" href={appPath(`/api/reports/export.xlsx${exportParams}`)}><Download size={17}/>Export confirmed</a></div></div>
+
+    <div className="receipt-viewbar">
+      {workspace.data?.requireReceiptConfirmation && <div className="status-tabs" aria-label="Payment status">{[["", "All"], ["Pending", "Pending"], ["Confirmed", "Confirmed"]].map(([value, label]) => <button type="button" key={label} className={filters.status === value ? "active" : ""} onClick={() => set("status", value)}>{label}</button>)}</div>}
+      <div className="view-switch" aria-label="Display style"><button type="button" className={view === "cards" ? "active" : ""} onClick={() => setView("cards")} title="Card view"><LayoutGrid size={16}/><span>Cards</span></button><button type="button" className={view === "list" ? "active" : ""} onClick={() => setView("list")} title="List view"><List size={17}/><span>List</span></button></div>
+    </div>
 
     <section className="panel filter-panel filter-panel-modern">
       <div className="filter-toolbar">
@@ -74,8 +88,7 @@ export default function ReceiptsPage() {
           </div>
         </details>
 
-        <label className="select-control"><span>Provider</span><select value={filters.provider} onChange={(event) => set("provider", event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option><option>Binance</option></select></label>
-        <label className="select-control"><span>Currency</span><select value={filters.currency} onChange={(event) => set("currency", event.target.value)}><option value="">All currencies</option><option>EGP</option><option>USD</option><option>USDT</option></select></label>
+        <label className="select-control"><span>Provider</span><select value={filters.provider} onChange={(event) => set("provider", event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option></select></label>
         <label className="select-control"><span>Device</span><select value={filters.deviceId} onChange={(event) => set("deviceId", event.target.value)}><option value="">All devices</option>{(devices.data ?? []).map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
       </div>
 
@@ -89,13 +102,18 @@ export default function ReceiptsPage() {
         </div>
       </details>
 
-      <div className="filter-footer"><span>{activeCount ? `${activeCount} active filter${activeCount === 1 ? "" : "s"}` : "Showing every confirmed receipt"}</span>{activeCount > 0 && <button type="button" className="clear-filter-button" onClick={clearFilters}><FilterX size={15}/>Clear all</button>}</div>
+      <div className="filter-footer"><span>{activeCount ? `${activeCount} active filter${activeCount === 1 ? "" : "s"}` : workspace.data?.requireReceiptConfirmation ? "Showing every payment" : "Showing every confirmed payment"}</span>{activeCount > 0 && <button type="button" className="clear-filter-button" onClick={clearFilters}><FilterX size={15}/>Clear all</button>}</div>
+      {activeCount > 0 && <div className="active-filter-chips">{filters.search && <FilterChip label={`Search: ${filters.search}`} onClear={() => set("search", "")}/>} {selectedWalletIds.length > 0 && <FilterChip label={walletLabel} onClear={() => set("walletIds", "")}/>} {filters.provider && <FilterChip label={filters.provider} onClear={() => set("provider", "")}/>} {filters.deviceId && <FilterChip label={devices.data?.find((item) => item.id === filters.deviceId)?.name ?? "Device"} onClear={() => set("deviceId", "")}/>} {filters.status && <FilterChip label={filters.status} onClear={() => set("status", "")}/>} {(advancedCount > 0) && <FilterChip label={`${advancedCount} more`} onClear={() => setFilters((current) => ({ ...current, from: "", to: "", minAmount: "", maxAmount: "", missingSender: false, missingReference: false, sort: "newest" }))}/>}</div>}
     </section>
 
     {receipts.error && <div className="error">{receipts.error.message}</div>}
+    {confirm.error && <div className="error">{confirm.error.message}</div>}
     <div className="result-summary"><strong>{receipts.data?.total ?? 0} receipts</strong><span>Page {receipts.data?.page ?? page} of {receipts.data?.totalPages || 1}</span></div>
-    <div className="grid">{(receipts.data?.items ?? []).map((receipt) => <article className="card" key={receipt.id}><div className="card-top"><div className="card-icon"><CheckCircle2/></div><span className="badge success">Received</span></div><h2 className="amount-heading">{money(receipt.amount, receipt.currencyCode)}</h2><p><strong>{receipt.walletName}</strong> · {receipt.provider}</p><p>{receipt.sender ? `From ${receipt.sender}` : "Sender unavailable"}</p>{receipt.providerReference && <p>Reference: <strong>{receipt.providerReference}</strong></p>}<p>{new Date(receipt.receivedAtUtc).toLocaleString()} · {receipt.deviceName}</p><details><summary>Original message</summary><div className="message">{receipt.message}</div></details></article>)}</div>
+    {view === "cards" ? <div className="grid receipt-card-grid">{(receipts.data?.items ?? []).map((receipt) => <article className="card receipt-card" key={receipt.id}><div className="card-top"><div className="card-icon">{receipt.status === "Pending" ? <ShieldCheck/> : <CheckCircle2/>}</div><StatusBadge status={receipt.status}/></div><h2 className="amount-heading">{money(receipt.amount)}</h2><p><strong>{receipt.walletName}</strong> · {receipt.provider}</p><p>{receipt.sender ? `From ${receipt.sender}` : "Sender unavailable"}</p>{receipt.providerReference && <p>Reference: <strong>{receipt.providerReference}</strong></p>}<p>{new Date(receipt.receivedAtUtc).toLocaleString()} · {receipt.deviceName}</p>{receipt.status === "Pending" && canConfirm && <button className="btn btn-wide confirm-payment" disabled={confirm.isPending} onClick={() => confirm.mutate(receipt.id)}><Check size={17}/>Confirm payment</button>}<details><summary>Original message</summary><div className="message">{receipt.message}</div></details></article>)}</div> : <div className="panel receipt-list"><div className="table-wrap"><table><thead><tr><th>Date</th><th>Wallet</th><th>Sender</th><th>Reference</th><th>Status</th><th>Amount</th><th></th></tr></thead><tbody>{(receipts.data?.items ?? []).map((receipt) => <tr key={receipt.id}><td><strong>{new Date(receipt.receivedAtUtc).toLocaleDateString()}</strong><small>{new Date(receipt.receivedAtUtc).toLocaleTimeString()}</small></td><td><strong>{receipt.walletName}</strong><small>{receipt.provider} · {receipt.deviceName}</small></td><td>{receipt.sender ?? <span className="muted">Unavailable</span>}</td><td>{receipt.providerReference ?? <span className="muted">—</span>}</td><td><StatusBadge status={receipt.status}/></td><td className="receipt-list-amount">{money(receipt.amount)}</td><td><div className="receipt-row-actions"><details className="message-popover"><summary>Message</summary><div className="message">{receipt.message}</div></details>{receipt.status === "Pending" && canConfirm && <button className="btn btn-small" disabled={confirm.isPending} onClick={() => confirm.mutate(receipt.id)}><Check size={15}/>Confirm</button>}</div></td></tr>)}</tbody></table></div></div>}
     {!receipts.isLoading && !receipts.data?.items.length && <div className="empty"><div><ShieldCheck size={38}/><h2>No matching receipts</h2><p className="muted">Change the filters or wait for a new payment.</p></div></div>}
     <div className="pagination"><button className="btn btn-secondary btn-small" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>{receipts.data?.total ?? 0} total</span><button className="btn btn-secondary btn-small" disabled={page >= (receipts.data?.totalPages ?? 1)} onClick={() => setPage((value) => value + 1)}>Next</button></div>
   </Shell>;
 }
+
+function StatusBadge({ status }: { status: Receipt["status"] }) { return <span className={`badge ${status === "Confirmed" ? "success" : ""}`}>{status === "Confirmed" ? <CheckCircle2 size={12}/> : <ShieldCheck size={12}/>} {status}</span>; }
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) { return <button type="button" onClick={onClear}>{label}<X size={13}/></button>; }

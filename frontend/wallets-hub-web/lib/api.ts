@@ -2,7 +2,7 @@ export type User = {
   id: string; displayName: string; email: string; role: "PlatformAdmin" | "Owner" | "Admin" | "Manager" | "Employee";
   organizationId?: string; organizationName?: string; organizationSlug?: string; visibleReceiptDays: number;
   canViewReports: boolean; canExportReports: boolean;
-  canManageDevices: boolean; canManageTeam: boolean; allWalletAccess: boolean; twoFactorEnabled: boolean;
+  canManageDevices: boolean; canManageTeam: boolean; canConfirmReceipts: boolean; allWalletAccess: boolean; twoFactorEnabled: boolean;
 };
 
 export const appPath = (path: string) => `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${path}`;
@@ -17,9 +17,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json();
 }
 
-export const money = (amount: number, currency: string) => currency === "USDT"
-  ? `${new Intl.NumberFormat("en-EG", { maximumFractionDigits: 8 }).format(amount)} USDT`
-  : new Intl.NumberFormat("en-EG", { style: "currency", currency }).format(amount);
+export const money = (amount: number, currency = "EGP") => new Intl.NumberFormat("en-EG", { style: "currency", currency: currency === "EGP" ? currency : "EGP" }).format(amount);
 
 export function queryString(values: Record<string, string | number | boolean | null | undefined>) {
   const search = new URLSearchParams();

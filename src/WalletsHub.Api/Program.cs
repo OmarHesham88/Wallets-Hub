@@ -111,17 +111,17 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         DROP INDEX IF EXISTS "IX_Wallets_OrganizationId_NormalizedAccountNumber";
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_Wallets_OrganizationId_Provider_NormalizedAccountNumber"
             ON "Wallets" ("OrganizationId", "Provider", "NormalizedAccountNumber");
-        UPDATE "WalletReceipts" SET "Status" = 1 WHERE "Status" <> 1;
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "TimeZoneId" character varying(80) NOT NULL DEFAULT 'Africa/Cairo';
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "MaskSensitiveMessages" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "RequireReceiptConfirmation" boolean NOT NULL DEFAULT false;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "AllWalletAccess" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "CanConfirmReceipts" boolean NOT NULL DEFAULT false;
         UPDATE "AspNetUsers" u SET "AllWalletAccess" = true
           WHERE u."OrganizationId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "UserWalletAccess" a WHERE a."UserId" = u."Id");
         ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "OpeningBalance" numeric(18,4) NOT NULL DEFAULT 0;
         ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "BalanceLimit" numeric(18,4) NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastHeartbeatAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastSmsAtUtc" timestamp with time zone NULL;
-        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastNotificationAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastCaptureAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "OfflineAlertSentAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "AppVersion" character varying(40) NULL;
@@ -129,7 +129,6 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "PendingUploadCount" integer NOT NULL DEFAULT 0;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "FailedUploadCount" integer NOT NULL DEFAULT 0;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "SmsPermissionGranted" boolean NOT NULL DEFAULT false;
-        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "NotificationPermissionGranted" boolean NOT NULL DEFAULT false;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "BatteryOptimizationIgnored" boolean NOT NULL DEFAULT false;
         CREATE TABLE IF NOT EXISTS "CaptureEvents" (
             "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
@@ -148,6 +147,7 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_WalletId_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "WalletId", "ReceivedAtUtc");
         CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_DeviceId_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "DeviceId", "ReceivedAtUtc");
         CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_CurrencyCode_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "CurrencyCode", "ReceivedAtUtc");
+        CREATE INDEX IF NOT EXISTS "IX_WalletReceipts_OrganizationId_Status_ReceivedAtUtc" ON "WalletReceipts" ("OrganizationId", "Status", "ReceivedAtUtc");
         CREATE TABLE IF NOT EXISTS "WalletLedgerEntries" (
             "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
             "WalletId" uuid NOT NULL REFERENCES "Wallets" ("Id") ON DELETE RESTRICT,
@@ -168,6 +168,29 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
             "CreatedAtUtc" timestamp with time zone NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_NotificationDispatches_DispatchKey" ON "NotificationDispatches" ("DispatchKey");
+
+        -- Wallets Hub is EGP-only. Remove legacy Binance, USD, and USDT data in
+        -- dependency order while keeping unrelated EGP history intact.
+        DELETE FROM "UserNotifications"
+          WHERE "SourceId" IN (SELECT "Id" FROM "WalletReceipts" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance')
+             OR lower("Title") LIKE '%usdt%' OR lower("Body") LIKE '%usdt%'
+             OR lower("Title") LIKE '%usd%' OR lower("Body") LIKE '%usd%';
+        DELETE FROM "AuditEvents"
+          WHERE ("EntityType" = 'WalletReceipt' AND "EntityId" IN (SELECT "Id"::text FROM "WalletReceipts" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance'))
+             OR ("EntityType" = 'Wallet' AND "EntityId" IN (SELECT "Id"::text FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance'))
+             OR lower(COALESCE("DetailJson", '')) LIKE '%binance%'
+             OR lower(COALESCE("DetailJson", '')) LIKE '%usdt%'
+             OR lower(COALESCE("DetailJson", '')) LIKE '%usd%';
+        DELETE FROM "CaptureEvents"
+          WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance' OR lower("SourcePackage") LIKE '%binance%'
+             OR "ReceiptId" IN (SELECT "Id" FROM "WalletReceipts" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance')
+             OR "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance');
+        DELETE FROM "WalletReceipts" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance';
+        DELETE FROM "NotificationPreferences" WHERE "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance');
+        DELETE FROM "UserWalletAccess" WHERE "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance');
+        DELETE FROM "WalletLedgerEntries" WHERE "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance') OR "RelatedWalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance');
+        DELETE FROM "WalletReconciliations" WHERE "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance');
+        DELETE FROM "Wallets" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance';
         """);
     return;
 }
@@ -290,7 +313,7 @@ static void MapPlatform(WebApplication app)
         {
             UserName = request.OwnerEmail.Trim(), Email = request.OwnerEmail.Trim(), DisplayName = request.OwnerName.Trim(),
             OrganizationId = organization.Id, EmailConfirmed = true,
-            CanViewReports = true, CanExportReports = true, CanManageDevices = true, CanManageTeam = true, VisibleReceiptDays = 3650
+            CanViewReports = true, CanExportReports = true, CanManageDevices = true, CanManageTeam = true, CanConfirmReceipts = true, VisibleReceiptDays = 3650
         };
         var created = await users.CreateAsync(owner, request.OwnerPassword);
         if (!created.Succeeded) return Results.BadRequest(new { error = string.Join("; ", created.Errors.Select(x => x.Description)) });
@@ -362,7 +385,7 @@ static void MapTeam(WebApplication app)
         {
             var role = (await users.GetRolesAsync(user)).SingleOrDefault() ?? Roles.Employee;
             var wallets = await db.UserWalletAccess.Where(x => x.UserId == user.Id).Select(x => x.WalletId).ToListAsync();
-            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.AllWalletAccess, WalletIds = wallets, CanEdit = user.Id != actor.Id && AccessControl.CanManageRole(actorRole, role) });
+            result.Add(new { user.Id, user.DisplayName, user.Email, Role = role, user.IsActive, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.CanConfirmReceipts, user.AllWalletAccess, WalletIds = wallets, CanEdit = user.Id != actor.Id && AccessControl.CanManageRole(actorRole, role) });
         }
         return Results.Ok(result);
     });
@@ -379,7 +402,7 @@ static void MapTeam(WebApplication app)
             UserName = request.Email.Trim(), Email = request.Email.Trim(), EmailConfirmed = true, DisplayName = request.DisplayName.Trim(), OrganizationId = actor.OrganizationId,
             VisibleReceiptDays = Math.Clamp(request.VisibleReceiptDays, 1, 3650), IsActive = true,
             CanViewReports = request.CanViewReports, CanExportReports = request.CanExportReports,
-            CanManageDevices = request.CanManageDevices, CanManageTeam = request.CanManageTeam, AllWalletAccess = request.AllWalletAccess
+            CanManageDevices = request.CanManageDevices, CanManageTeam = request.CanManageTeam, CanConfirmReceipts = request.CanConfirmReceipts, AllWalletAccess = request.AllWalletAccess
         };
         ApplyRoleDefaults(user, request.Role);
         var created = await users.CreateAsync(user, request.Password);
@@ -419,6 +442,7 @@ static void MapTeam(WebApplication app)
         user.CanExportReports = request.CanExportReports;
         user.CanManageDevices = request.CanManageDevices;
         user.CanManageTeam = request.CanManageTeam;
+        user.CanConfirmReceipts = request.CanConfirmReceipts;
         user.AllWalletAccess = request.AllWalletAccess;
         ApplyRoleDefaults(user, request.Role);
         var accessError = await SetWalletAccess(db, user, actor.OrganizationId!.Value, request.AllWalletAccess, request.WalletIds);
@@ -465,7 +489,7 @@ static void MapWallets(WebApplication app)
         return Results.Ok(await query.OrderBy(x => x.Name).Select(x => new
         {
             x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode, x.DeviceId, x.IsActive, x.OpeningBalance, x.BalanceLimit, x.CreatedAtUtc,
-            CurrentBalance = x.OpeningBalance + db.WalletReceipts.Where(r => r.WalletId == x.Id).Sum(r => (decimal?)r.Amount)!.GetValueOrDefault()
+            CurrentBalance = x.OpeningBalance + db.WalletReceipts.Where(r => r.WalletId == x.Id && r.Status == ReceiptStatus.Confirmed).Sum(r => (decimal?)r.Amount)!.GetValueOrDefault()
                 + db.WalletLedgerEntries.Where(entry => entry.WalletId == x.Id).Sum(entry => (decimal?)entry.Amount)!.GetValueOrDefault()
         }).ToListAsync());
     });
@@ -534,7 +558,7 @@ static void MapDevices(WebApplication app)
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
         return Results.Ok(await db.WalletDevices.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId).OrderByDescending(x => x.IsActive).ThenByDescending(x => x.LastSeenAtUtc)
-            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, x.LastHeartbeatAtUtc, x.LastSmsAtUtc, x.LastNotificationAtUtc, x.LastCaptureAtUtc, x.AppVersion, x.AndroidVersion, x.PendingUploadCount, x.FailedUploadCount, x.SmsPermissionGranted, x.NotificationPermissionGranted, x.BatteryOptimizationIgnored, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id && w.IsActive) }).ToListAsync());
+            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, x.LastHeartbeatAtUtc, x.LastSmsAtUtc, x.LastCaptureAtUtc, x.AppVersion, x.AndroidVersion, x.PendingUploadCount, x.FailedUploadCount, x.SmsPermissionGranted, x.BatteryOptimizationIgnored, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id && w.IsActive) }).ToListAsync());
     }).RequireAuthorization();
     devices.MapPost("/pairing", async (DevicePairingRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -568,10 +592,9 @@ static void MapDevices(WebApplication app)
         device.AppVersion = Clean(request.AppVersion, 40); device.AndroidVersion = Clean(request.AndroidVersion, 40);
         device.PendingUploadCount = Math.Clamp(request.PendingUploadCount, 0, 100000);
         device.FailedUploadCount = Math.Clamp(request.FailedUploadCount, 0, 100000);
-        device.SmsPermissionGranted = request.SmsPermissionGranted; device.NotificationPermissionGranted = request.NotificationPermissionGranted;
+        device.SmsPermissionGranted = request.SmsPermissionGranted;
         device.BatteryOptimizationIgnored = request.BatteryOptimizationIgnored;
         if (request.LastSmsAtUtc.HasValue) device.LastSmsAtUtc = request.LastSmsAtUtc.Value.ToUniversalTime();
-        if (request.LastNotificationAtUtc.HasValue) device.LastNotificationAtUtc = request.LastNotificationAtUtc.Value.ToUniversalTime();
         if (device.OfflineAlertSentAtUtc.HasValue) device.OfflineAlertSentAtUtc = null;
         await db.SaveChangesAsync(); return Results.NoContent();
     });
@@ -714,17 +737,18 @@ static void MapReceipts(WebApplication app)
             await QueueCaptureIssueNotifications(db, device, capture);
             await db.SaveChangesAsync(); return Results.Accepted(value: new { ignored = true, reason = capture.Reason, captureEventId = capture.Id });
         }
+        var requireConfirmation = await db.Organizations.Where(x => x.Id == device.OrganizationId).Select(x => x.RequireReceiptConfirmation).SingleAsync();
         var receipt = new WalletReceipt
         {
             OrganizationId = device.OrganizationId, WalletId = wallet.Id, DeviceId = device.Id, Provider = parsed.Provider,
             Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference,
             Fingerprint = request.Fingerprint, ProtectedMessage = capture.ProtectedMessage,
-            SourcePackage = request.SourcePackage ?? "unknown", Status = ReceiptStatus.Confirmed, ReceivedAtUtc = receivedAt
+            SourcePackage = request.SourcePackage ?? "unknown", Status = requireConfirmation ? ReceiptStatus.Pending : ReceiptStatus.Confirmed, ReceivedAtUtc = receivedAt
         };
         db.WalletReceipts.Add(receipt);
         capture.Status = "Accepted"; capture.Reason = "receipt-created"; capture.ReceiptId = receipt.Id;
         var currentWalletBalance = await WalletBalance(db, wallet);
-        var recentAmounts = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.ReceivedAtUtc >= DateTime.UtcNow.AddDays(-30)).Select(x => x.Amount).ToListAsync();
+        var recentAmounts = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.Status == ReceiptStatus.Confirmed && x.ReceivedAtUtc >= DateTime.UtcNow.AddDays(-30)).Select(x => x.Amount).ToListAsync();
         var unusual = recentAmounts.Count >= 10 && parsed.Amount > recentAmounts.Average() * 5;
         var exceedsLimit = wallet.BalanceLimit.HasValue && currentWalletBalance + parsed.Amount > wallet.BalanceLimit.Value;
         if (unusual || exceedsLimit)
@@ -747,7 +771,7 @@ static void MapReceipts(WebApplication app)
             var enabled = preference?.EveryReceipt ?? recipient.Role is Roles.Owner or Roles.Admin;
             var meetsThreshold = preference?.MinimumAmount is null || parsed.Amount >= preference.MinimumAmount.Value;
             if (enabled && meetsThreshold)
-                db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = recipient.Id, Title = $"{parsed.Amount:N2} {parsed.CurrencyCode} received", Body = $"{parsed.Provider} payment detected for {wallet.Name}.", Link = "/receipts", SourceId = receipt.Id });
+                db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = recipient.Id, Title = requireConfirmation ? $"{parsed.Amount:N2} EGP awaiting confirmation" : $"{parsed.Amount:N2} EGP received", Body = $"{parsed.Provider} payment detected for {wallet.Name}.", Link = "/receipts", SourceId = receipt.Id });
         }
         db.AuditEvents.Add(Audit(device.OrganizationId, null, "ReceiptDetected", nameof(WalletReceipt), receipt.Id.ToString(), new { wallet.Id, parsed.Provider, parsed.Amount, parsed.CurrencyCode, CaptureEventId = capture.Id }));
         await db.SaveChangesAsync();
@@ -766,6 +790,7 @@ static void MapReceipts(WebApplication app)
         if (walletIds.Count > 0) query = query.Where(x => walletIds.Contains(x.WalletId));
         if (!string.IsNullOrWhiteSpace(request.Provider)) query = query.Where(x => x.Provider == request.Provider);
         if (!string.IsNullOrWhiteSpace(request.Currency)) query = query.Where(x => x.CurrencyCode == request.Currency.ToUpper());
+        if (!string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ReceiptStatus>(request.Status, true, out var receiptStatus)) query = query.Where(x => x.Status == receiptStatus);
         if (request.DeviceId.HasValue) query = query.Where(x => x.DeviceId == request.DeviceId);
         if (request.MinAmount.HasValue) query = query.Where(x => x.Amount >= request.MinAmount);
         if (request.MaxAmount.HasValue) query = query.Where(x => x.Amount <= request.MaxAmount);
@@ -799,8 +824,24 @@ static void MapReceipts(WebApplication app)
             .Join(db.WalletDevices, row => row.Receipt.DeviceId, d => d.Id, (row, d) => new { row.Receipt, row.WalletName, DeviceName = d.Name }).ToListAsync();
         var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
         var maskMessages = await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.MaskSensitiveMessages).SingleAsync();
-        var items = rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.DeviceName, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Message = maskMessages ? MaskSensitive(Unprotect(protector, x.Receipt.ProtectedMessage)) : Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc });
+        var items = rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.DeviceName, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Status = x.Receipt.Status.ToString(), x.Receipt.ReviewedByUserId, x.Receipt.ReviewedAtUtc, Message = maskMessages ? MaskSensitive(Unprotect(protector, x.Receipt.ProtectedMessage)) : Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc });
         return Results.Ok(new { Items = items, Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
+    });
+
+    receipts.MapPost("/{id:guid}/confirm", async (Guid id, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        if (!IsOrganizationAdmin(principal) && !user.CanConfirmReceipts) return Results.Forbid();
+        var receipt = await ScopedReceipts(principal, user, db).SingleOrDefaultAsync(x => x.Id == id);
+        if (receipt is null) return Results.NotFound();
+        if (receipt.Status == ReceiptStatus.Confirmed) return Results.NoContent();
+        receipt.Status = ReceiptStatus.Confirmed;
+        receipt.ReviewedByUserId = user.Id;
+        receipt.ReviewedAtUtc = DateTime.UtcNow;
+        receipt.ReviewNote = "Confirmed by user.";
+        db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "ReceiptConfirmed", nameof(WalletReceipt), receipt.Id.ToString(), new { receipt.WalletId, receipt.Amount, receipt.CurrencyCode }));
+        await db.SaveChangesAsync();
+        return Results.NoContent();
     });
 
     app.MapGet("/api/capture-events", async ([AsParameters] CaptureEventSearchRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
@@ -833,7 +874,8 @@ static void MapReceipts(WebApplication app)
         if (!capture.Amount.HasValue || string.IsNullOrWhiteSpace(capture.Provider) || string.IsNullOrWhiteSpace(capture.CurrencyCode)) return Results.BadRequest(new { error = "This message did not contain enough payment data to resolve manually." });
         var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId && x.IsActive);
         if (wallet is null || wallet.Provider != capture.Provider || wallet.CurrencyCode != capture.CurrencyCode) return Results.BadRequest(new { error = "Choose an active wallet with the same provider and currency." });
-        var receipt = new WalletReceipt { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = capture.Provider, Amount = capture.Amount.Value, CurrencyCode = capture.CurrencyCode, Sender = capture.Sender, ProviderReference = capture.ProviderReference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
+        var requireConfirmation = await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.RequireReceiptConfirmation).SingleAsync();
+        var receipt = new WalletReceipt { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = capture.Provider, Amount = capture.Amount.Value, CurrencyCode = capture.CurrencyCode, Sender = capture.Sender, ProviderReference = capture.ProviderReference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = requireConfirmation ? ReceiptStatus.Pending : ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
         db.WalletReceipts.Add(receipt); capture.WalletId = wallet.Id; capture.ReceiptId = receipt.Id; capture.Status = "Accepted"; capture.Reason = "manually-resolved";
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "CaptureManuallyResolved", nameof(CaptureEvent), capture.Id.ToString(), new { wallet.Id, ReceiptId = receipt.Id })); await db.SaveChangesAsync();
         return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id });
@@ -860,7 +902,8 @@ static void MapReceipts(WebApplication app)
             capture.Status = "Unmatched"; capture.Reason = candidates.Count == 0 ? "wallet-not-resolved" : "ambiguous-wallet";
             await db.SaveChangesAsync(); return Results.Accepted(value: new { matched = false, reason = capture.Reason });
         }
-        var wallet = candidates[0]; var receipt = new WalletReceipt { OrganizationId = capture.OrganizationId, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = parsed.Provider, Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
+        var requireConfirmation = await db.Organizations.Where(x => x.Id == capture.OrganizationId).Select(x => x.RequireReceiptConfirmation).SingleAsync();
+        var wallet = candidates[0]; var receipt = new WalletReceipt { OrganizationId = capture.OrganizationId, WalletId = wallet.Id, DeviceId = capture.DeviceId, Provider = parsed.Provider, Amount = parsed.Amount, CurrencyCode = parsed.CurrencyCode, Sender = parsed.Sender, ProviderReference = parsed.Reference, Fingerprint = capture.Fingerprint, ProtectedMessage = capture.ProtectedMessage, SourcePackage = capture.SourcePackage, Status = requireConfirmation ? ReceiptStatus.Pending : ReceiptStatus.Confirmed, ReceivedAtUtc = capture.ReceivedAtUtc };
         db.WalletReceipts.Add(receipt); capture.WalletId = wallet.Id; capture.ReceiptId = receipt.Id; capture.Status = "Accepted"; capture.Reason = "reprocessed";
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "CaptureReprocessed", nameof(CaptureEvent), capture.Id.ToString(), new { wallet.Id, ReceiptId = receipt.Id })); await db.SaveChangesAsync();
         return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id });
@@ -909,7 +952,7 @@ static void MapNotifications(WebApplication app)
     {
         var user = await RequireOrganizationUser(principal, users);
         var organization = await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId);
-        return Results.Ok(new { organization.TimeZoneId, organization.MaskSensitiveMessages });
+        return Results.Ok(new { organization.TimeZoneId, organization.MaskSensitiveMessages, organization.RequireReceiptConfirmation });
     });
     settings.MapPut("/workspace", async (WorkspaceSettingsRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -918,6 +961,19 @@ static void MapNotifications(WebApplication app)
         try { _ = ResolveTimeZone(request.TimeZoneId); } catch { return Results.BadRequest(new { error = "That time zone is not supported." }); }
         var organization = await db.Organizations.SingleAsync(x => x.Id == user.OrganizationId);
         organization.TimeZoneId = request.TimeZoneId; organization.MaskSensitiveMessages = request.MaskSensitiveMessages;
+        var wasRequired = organization.RequireReceiptConfirmation;
+        organization.RequireReceiptConfirmation = request.RequireReceiptConfirmation;
+        if (wasRequired && !request.RequireReceiptConfirmation)
+        {
+            var pending = await db.WalletReceipts.Where(x => x.OrganizationId == user.OrganizationId && x.Status == ReceiptStatus.Pending).ToListAsync();
+            foreach (var receipt in pending)
+            {
+                receipt.Status = ReceiptStatus.Confirmed;
+                receipt.ReviewedByUserId = user.Id;
+                receipt.ReviewedAtUtc = DateTime.UtcNow;
+                receipt.ReviewNote = "Automatically confirmed when confirmation mode was disabled.";
+            }
+        }
         db.AuditEvents.Add(Audit(user.OrganizationId, user.Id, "WorkspaceSettingsUpdated", nameof(Organization), organization.Id.ToString(), request));
         await db.SaveChangesAsync(); return Results.NoContent();
     });
@@ -954,7 +1010,7 @@ static void MapOperations(WebApplication app)
         var balances = await wallets.OrderBy(x => x.Name).Select(x => new
         {
             x.Id, x.Name, x.Provider, x.CurrencyCode, x.OpeningBalance, x.BalanceLimit, x.IsActive,
-            Received = db.WalletReceipts.Where(r => r.WalletId == x.Id).Sum(r => (decimal?)r.Amount) ?? 0,
+            Received = db.WalletReceipts.Where(r => r.WalletId == x.Id && r.Status == ReceiptStatus.Confirmed).Sum(r => (decimal?)r.Amount) ?? 0,
             Adjustments = db.WalletLedgerEntries.Where(e => e.WalletId == x.Id).Sum(e => (decimal?)e.Amount) ?? 0,
             LastReconciledAtUtc = db.WalletReconciliations.Where(r => r.WalletId == x.Id).Max(r => (DateTime?)r.CreatedAtUtc)
         }).ToListAsync();
@@ -971,12 +1027,12 @@ static void MapOperations(WebApplication app)
         var wallet = await walletQuery.SingleOrDefaultAsync(); if (wallet is null) return Results.NotFound();
         var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-30); var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
         if (end <= start || end - start > TimeSpan.FromDays(366)) return Results.BadRequest(new { error = "Choose a statement period up to 366 days." });
-        var receiptRows = await db.WalletReceipts.AsNoTracking().Where(x => x.WalletId == wallet.Id && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end)
+        var receiptRows = await db.WalletReceipts.AsNoTracking().Where(x => x.WalletId == wallet.Id && x.Status == ReceiptStatus.Confirmed && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end)
             .Select(x => new { x.Id, Type = "Receipt", x.Amount, Note = x.Sender ?? x.ProviderReference, OccurredAtUtc = x.ReceivedAtUtc }).ToListAsync();
         var ledgerRows = await db.WalletLedgerEntries.AsNoTracking().Where(x => x.WalletId == wallet.Id && x.OccurredAtUtc >= start && x.OccurredAtUtc <= end)
             .Select(x => new { x.Id, x.Type, x.Amount, x.Note, x.OccurredAtUtc }).ToListAsync();
         var rows = receiptRows.Concat(ledgerRows).OrderByDescending(x => x.OccurredAtUtc).ToList(); var total = rows.Count; var page = Math.Max(request.Page ?? 1, 1); var pageSize = Math.Clamp(request.PageSize ?? 50, 10, 200);
-        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0; var adjustments = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.Status == ReceiptStatus.Confirmed).SumAsync(x => (decimal?)x.Amount) ?? 0; var adjustments = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
         return Results.Ok(new { Wallet = new { wallet.Id, wallet.Name, wallet.Provider, wallet.CurrencyCode }, CurrentBalance = wallet.OpeningBalance + received + adjustments, Items = rows.Skip((page - 1) * pageSize).Take(pageSize), Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
     });
     operations.MapPost("/entry", async (LedgerEntryRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
@@ -1017,7 +1073,7 @@ static void MapOperations(WebApplication app)
         var user = await RequireOrganizationUser(principal, users); if (!IsOrganizationAdmin(principal)) return Results.Forbid();
         var wallet = await db.Wallets.SingleOrDefaultAsync(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId);
         if (wallet is null) return Results.NotFound();
-        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.Status == ReceiptStatus.Confirmed).SumAsync(x => (decimal?)x.Amount) ?? 0;
         var adjustments = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
         var expected = wallet.OpeningBalance + received + adjustments;
         var reconciliation = new WalletReconciliation { OrganizationId = user.OrganizationId!.Value, WalletId = wallet.Id, ExpectedBalance = expected, ActualBalance = request.ActualBalance, Variance = request.ActualBalance - expected, Note = Clean(request.Note, 500), CreatedByUserId = user.Id };
@@ -1034,7 +1090,7 @@ static void MapReports(WebApplication app)
         var organization = await db.Organizations.AsNoTracking().SingleAsync(x => x.Id == user.OrganizationId);
         var zone = ResolveTimeZone(organization.TimeZoneId); var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
         var start = TimeZoneInfo.ConvertTimeToUtc(localNow.Date, zone); var end = TimeZoneInfo.ConvertTimeToUtc(localNow.Date.AddDays(1), zone);
-        var query = ScopedReceipts(principal, user, db);
+        var query = ConfirmedReceipts(principal, user, db);
         var today = await query.Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end).GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
         var latest = await query.OrderByDescending(x => x.ReceivedAtUtc).Take(8).Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { r.Id, r.WalletId, WalletName = w.Name, r.Provider, r.Amount, r.CurrencyCode, r.Sender, r.ReceivedAtUtc }).ToListAsync();
         return Results.Ok(new { LocalDate = localNow.Date, TimeZone = organization.TimeZoneId, Today = today, Latest = latest });
@@ -1049,7 +1105,7 @@ static void MapReports(WebApplication app)
         var start = request.From?.ToUniversalTime() ?? TimeZoneInfo.ConvertTimeToUtc(localToday.AddDays(-29), zone);
         var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
         if (end <= start || end - start > TimeSpan.FromDays(366)) return Results.BadRequest(new { error = "Choose a date range between one minute and 366 days." });
-        var query = ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request);
+        var query = ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request);
         var rows = await query.Select(x => new { x.WalletId, x.DeviceId, x.Provider, x.CurrencyCode, x.Amount, x.Sender, x.ReceivedAtUtc }).ToListAsync();
         var totals = rows.GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount), Average = g.Average(x => x.Amount), Median = Median(g.Select(x => x.Amount)), Maximum = g.Max(x => x.Amount) }).ToList();
         var wallets = rows.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToList();
@@ -1061,10 +1117,10 @@ static void MapReports(WebApplication app)
         var devices = rows.GroupBy(x => new { x.DeviceId, x.CurrencyCode }).Select(g => new { g.Key.DeviceId, DeviceName = deviceNames.GetValueOrDefault(g.Key.DeviceId, "Device"), g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderByDescending(x => x.Amount).ToList();
         var hours = localRows.GroupBy(x => new { Hour = x.Local.Hour, x.Row.CurrencyCode }).Select(g => new { g.Key.Hour, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Row.Amount) }).OrderBy(x => x.Hour).ToList();
         var duration = end - start; var previousStart = start - duration;
-        var previous = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= previousStart && x.ReceivedAtUtc < start), request)
+        var previous = await ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= previousStart && x.ReceivedAtUtc < start), request)
             .GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
         var senders = rows.Where(x => !string.IsNullOrWhiteSpace(x.Sender)).Select(x => x.Sender!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var knownBefore = await ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc < start && x.Sender != null && senders.Contains(x.Sender)).Select(x => x.Sender!).Distinct().ToListAsync();
+        var knownBefore = await ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc < start && x.Sender != null && senders.Contains(x.Sender)).Select(x => x.Sender!).Distinct().ToListAsync();
         var newSenders = senders.Count(sender => !knownBefore.Contains(sender, StringComparer.OrdinalIgnoreCase));
         var captureQuality = await db.CaptureEvents.Where(x => x.OrganizationId == user.OrganizationId && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end).GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync();
         var quality = new { MissingSender = rows.Count(x => string.IsNullOrWhiteSpace(x.Sender)), UnmatchedCaptures = captureQuality.Where(x => x.Status == "Unmatched").Sum(x => x.Count), DuplicateCaptures = captureQuality.Where(x => x.Status == "Duplicate").Sum(x => x.Count), RejectedCaptures = captureQuality.Where(x => x.Status == "Rejected").Sum(x => x.Count), FailedUploads = await db.WalletDevices.Where(x => x.OrganizationId == user.OrganizationId).SumAsync(x => x.FailedUploadCount), NewSenders = newSenders, ReturningSenders = senders.Count - newSenders };
@@ -1076,7 +1132,7 @@ static void MapReports(WebApplication app)
         if (!user.CanExportReports && !IsOrganizationAdmin(principal)) return Results.Forbid();
         var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-30);
         var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
-        var rows = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request)
+        var rows = await ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request)
             .Join(db.Wallets, receipt => receipt.WalletId, wallet => wallet.Id, (receipt, wallet) => new { Receipt = receipt, WalletName = wallet.Name })
             .OrderByDescending(x => x.Receipt.ReceivedAtUtc).ToListAsync();
         using var workbook = new XLWorkbook();
@@ -1141,6 +1197,8 @@ static IQueryable<WalletReceipt> ScopedReceipts(ClaimsPrincipal principal, AppUs
     if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.WalletId));
     return query.Where(x => x.ReceivedAtUtc >= DateTime.UtcNow.AddDays(-user.VisibleReceiptDays));
 }
+static IQueryable<WalletReceipt> ConfirmedReceipts(ClaimsPrincipal principal, AppUser user, WalletsDbContext db) =>
+    ScopedReceipts(principal, user, db).Where(x => x.Status == ReceiptStatus.Confirmed && x.CurrencyCode == "EGP");
 
 static bool IsOrganizationAdmin(ClaimsPrincipal principal) => principal.IsInRole(Roles.Owner) || principal.IsInRole(Roles.Admin);
 static bool CanManageTeam(ClaimsPrincipal principal, AppUser user) => IsOrganizationAdmin(principal) || user.CanManageTeam;
@@ -1148,7 +1206,7 @@ static void ApplyRoleDefaults(AppUser user, string role)
 {
     if (role is Roles.Owner or Roles.Admin)
     {
-        user.CanViewReports = user.CanExportReports = user.CanManageDevices = user.CanManageTeam = true;
+        user.CanViewReports = user.CanExportReports = user.CanManageDevices = user.CanManageTeam = user.CanConfirmReceipts = true;
         user.VisibleReceiptDays = 3650; user.AllWalletAccess = true;
     }
 }
@@ -1164,7 +1222,7 @@ static async Task<string?> SetWalletAccess(WalletsDbContext db, AppUser user, Gu
     db.UserWalletAccess.AddRange(valid.Select(walletId => new UserWalletAccess { UserId = user.Id, WalletId = walletId }));
     return null;
 }
-static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.AllWalletAccess, user.TwoFactorEnabled };
+static object UserResponse(AppUser user, string role, Organization? organization) => new { user.Id, user.DisplayName, user.Email, Role = role, user.OrganizationId, OrganizationName = organization?.Name, OrganizationSlug = organization?.Slug, user.VisibleReceiptDays, user.CanViewReports, user.CanExportReports, user.CanManageDevices, user.CanManageTeam, user.CanConfirmReceipts, user.AllWalletAccess, user.TwoFactorEnabled };
 static AuditEvent Audit(Guid? organizationId, string? userId, string action, string entityType, string? entityId, object? detail = null) => new() { OrganizationId = organizationId, UserId = userId, Action = action, EntityType = entityType, EntityId = entityId, DetailJson = detail is null ? null : JsonSerializer.Serialize(detail) };
 static async Task<string> GetRole(UserManager<AppUser> users, AppUser user) => (await users.GetRolesAsync(user)).SingleOrDefault() ?? Roles.Employee;
 static async Task<int> ActiveOwnerCount(WalletsDbContext db, Guid organizationId)
@@ -1218,7 +1276,7 @@ static decimal Median(IEnumerable<decimal> values)
 }
 static async Task<decimal> WalletBalance(WalletsDbContext db, Wallet wallet)
 {
-    var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
+    var received = await db.WalletReceipts.Where(x => x.WalletId == wallet.Id && x.Status == ReceiptStatus.Confirmed).SumAsync(x => (decimal?)x.Amount) ?? 0;
     var ledger = await db.WalletLedgerEntries.Where(x => x.WalletId == wallet.Id).SumAsync(x => (decimal?)x.Amount) ?? 0;
     return wallet.OpeningBalance + received + ledger;
 }
@@ -1230,12 +1288,11 @@ static string? Clean(string? value, int maxLength) { var clean = value?.Trim(); 
 static string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim() ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 static string NormalizeAccount(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", "USD" => "USD", "USDT" => "USDT", _ => throw new BadHttpRequestException("Currency must be EGP, USD, or USDT.") };
+static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", _ => throw new BadHttpRequestException("Wallets Hub supports EGP only.") };
 static void ValidateProviderCurrency(string provider, string currency)
 {
-    var binance = provider.Equals("Binance", StringComparison.OrdinalIgnoreCase);
-    if (binance && currency != "USDT") throw new BadHttpRequestException("Binance wallets must use USDT.");
-    if (!binance && currency == "USDT") throw new BadHttpRequestException("USDT is available only for Binance wallets.");
+    if (provider.Equals("Binance", StringComparison.OrdinalIgnoreCase)) throw new BadHttpRequestException("Binance wallets are not supported.");
+    if (currency != "EGP") throw new BadHttpRequestException("Wallets Hub supports EGP only.");
 }
 static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries).Select(part => new string(part.Where(char.IsLetterOrDigit).ToArray())).Where(part => part.Length > 0));
 static string Unprotect(IDataProtector protector, string value) { try { return protector.Unprotect(value); } catch { return "Message unavailable"; } }
@@ -1248,18 +1305,18 @@ public sealed record PlatformAccountUpdateRequest(string Email, string CurrentPa
 public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword);
 public sealed record PlatformOwnerPasswordResetRequest(string OwnerEmail, string NewPassword);
 public sealed record ToggleRequest(bool Enabled);
-public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
-public sealed record UpdateTeamMemberRequest(string DisplayName, string Email, string Role, bool IsActive, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
+public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool CanConfirmReceipts, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
+public sealed record UpdateTeamMemberRequest(string DisplayName, string Email, string Role, bool IsActive, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool CanConfirmReceipts, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);
 public sealed record ResetPasswordRequest(string NewPassword);
 public sealed record WalletRequest(string Name, string Provider, string AccountNumber, string CurrencyCode, Guid? DeviceId, bool IsActive = true, decimal OpeningBalance = 0, decimal? BalanceLimit = null);
 public sealed record DevicePairingRequest(string Name);
 public sealed record PairDeviceRequest(string PairingCode, string InstallationId);
 public sealed record UpdateDeviceRequest(string Name, bool IsActive);
-public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidVersion, int PendingUploadCount, int FailedUploadCount, bool SmsPermissionGranted, bool NotificationPermissionGranted, bool BatteryOptimizationIgnored, DateTime? LastSmsAtUtc, DateTime? LastNotificationAtUtc);
+public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidVersion, int PendingUploadCount, int FailedUploadCount, bool SmsPermissionGranted, bool BatteryOptimizationIgnored, DateTime? LastSmsAtUtc);
 public sealed record CaptureRequest(Guid? WalletId, string? SourcePackage, string? Title, string? Body, DateTime ReceivedAtUtc, string Fingerprint);
 public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
 public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
-public sealed record WorkspaceSettingsRequest(string TimeZoneId, bool MaskSensitiveMessages);
+public sealed record WorkspaceSettingsRequest(string TimeZoneId, bool MaskSensitiveMessages, bool RequireReceiptConfirmation);
 public sealed record ResolveCaptureRequest(Guid WalletId);
 public sealed record LedgerEntryRequest(Guid WalletId, string Type, decimal Amount, string? Note, DateTime? OccurredAtUtc);
 public sealed record WalletTransferRequest(Guid FromWalletId, Guid ToWalletId, decimal Amount, string? Note, DateTime? OccurredAtUtc);
@@ -1269,7 +1326,7 @@ public sealed class ReceiptSearchRequest
 {
     public DateTime? From { get; set; } public DateTime? To { get; set; } public Guid? WalletId { get; set; } public string? WalletIds { get; set; }
     public string? Provider { get; set; } public string? Currency { get; set; } public Guid? DeviceId { get; set; } public decimal? MinAmount { get; set; } public decimal? MaxAmount { get; set; }
-    public string? Search { get; set; } public string? SearchMode { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } public string? Sort { get; set; }
+    public string? Search { get; set; } public string? SearchMode { get; set; } public string? Status { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } public string? Sort { get; set; }
     public int? Page { get; set; } public int? PageSize { get; set; }
 }
 public sealed class CaptureEventSearchRequest { public string? Status { get; set; } public string? Reason { get; set; } public Guid? DeviceId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }

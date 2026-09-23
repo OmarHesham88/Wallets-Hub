@@ -5,11 +5,9 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
-  Activity,
   Bell,
   Building2,
   CircleDollarSign,
-  ClipboardList,
   LayoutDashboard,
   Landmark,
   LockKeyhole,
@@ -32,11 +30,8 @@ const organizationLinks = [
   ["/wallets", "Wallets", WalletCards],
   ["/wallet-operations", "Balances", Landmark],
   ["/devices", "Devices", Smartphone],
-  ["/capture-health", "Capture inbox", Activity],
   ["/team", "Team & access", Users],
   ["/reports", "Reports", BarChart3],
-  ["/audit", "Audit trail", ClipboardList],
-  ["/notifications", "Notifications", Bell],
   ["/settings", "Settings", Settings2],
 ] as const;
 
@@ -77,13 +72,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
               me.data?.role === "Admin" ||
               me.data?.canManageDevices
             );
-          if (href === "/capture-health")
-            return (
-              me.data?.role === "Owner" ||
-              me.data?.role === "Admin" ||
-              me.data?.canManageDevices
-            );
-          if (href === "/audit") return me.data?.role === "Owner" || me.data?.role === "Admin";
           if (href === "/reports")
             return (
               me.data?.role === "Owner" ||

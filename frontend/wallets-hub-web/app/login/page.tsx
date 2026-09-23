@@ -63,7 +63,7 @@ export default function LoginPage() {
             {t("Know when money arrives. See it in your reports instantly.")}
           </h1>
           <p>
-            {t("Connect wallet phones, assign employee access, capture receipts, and understand every EGP, USD, or USDT movement from a clean operational dashboard.")}
+            {t("Connect wallet phones, assign employee access, capture receipts, and understand every EGP movement from a clean operational dashboard.")}
           </p>
           <div className="feature-row">
             <span>

@@ -23,6 +23,7 @@ public sealed class Organization
     public bool IsActive { get; set; } = true;
     public string TimeZoneId { get; set; } = "Africa/Cairo";
     public bool MaskSensitiveMessages { get; set; }
+    public bool RequireReceiptConfirmation { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -33,7 +34,6 @@ public sealed class AppUser : IdentityUser
     public bool IsActive { get; set; } = true;
     public int VisibleReceiptDays { get; set; } = 2;
     public bool CanConfirmReceipts { get; set; }
-    public bool CanRejectReceipts { get; set; }
     public bool CanViewReports { get; set; }
     public bool CanExportReports { get; set; }
     public bool CanManageDevices { get; set; }
@@ -73,7 +73,6 @@ public sealed class WalletDevice
     public DateTime? LastSeenAtUtc { get; set; }
     public DateTime? LastHeartbeatAtUtc { get; set; }
     public DateTime? LastSmsAtUtc { get; set; }
-    public DateTime? LastNotificationAtUtc { get; set; }
     public DateTime? LastCaptureAtUtc { get; set; }
     public DateTime? OfflineAlertSentAtUtc { get; set; }
     public string? AppVersion { get; set; }
@@ -81,7 +80,6 @@ public sealed class WalletDevice
     public int PendingUploadCount { get; set; }
     public int FailedUploadCount { get; set; }
     public bool SmsPermissionGranted { get; set; }
-    public bool NotificationPermissionGranted { get; set; }
     public bool BatteryOptimizationIgnored { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }

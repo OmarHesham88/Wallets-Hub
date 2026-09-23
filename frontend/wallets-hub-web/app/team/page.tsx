@@ -7,7 +7,7 @@ import { Shell } from "@/components/shell";
 import { api, User } from "@/lib/api";
 
 type Wallet = { id: string; name: string; provider: string };
-type Member = { id: string; displayName: string; email: string; role: string; isActive: boolean; visibleReceiptDays: number; allWalletAccess: boolean; walletIds: string[]; canViewReports: boolean; canExportReports: boolean; canManageDevices: boolean; canManageTeam: boolean; canEdit: boolean };
+type Member = { id: string; displayName: string; email: string; role: string; isActive: boolean; visibleReceiptDays: number; allWalletAccess: boolean; walletIds: string[]; canViewReports: boolean; canExportReports: boolean; canManageDevices: boolean; canManageTeam: boolean; canConfirmReceipts: boolean; canEdit: boolean };
 
 export default function TeamPage() {
   const client = useQueryClient();
@@ -27,7 +27,7 @@ export default function TeamPage() {
   function openEdit(member: Member) { setAllWallets(member.allWalletAccess); setEditing(member); save.reset(); }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); const flag = (name: string) => form.get(name) === "on";
-    save.mutate({ id: editing?.id, body: { displayName: form.get("name"), email: form.get("email"), password: form.get("password") || undefined, role: form.get("role"), isActive: editing ? flag("active") : true, visibleReceiptDays: Number(form.get("days")), canViewReports: flag("reports"), canExportReports: flag("export"), canManageDevices: flag("devices"), canManageTeam: flag("team"), allWalletAccess: allWallets, walletIds: allWallets ? [] : form.getAll("wallets") } });
+    save.mutate({ id: editing?.id, body: { displayName: form.get("name"), email: form.get("email"), password: form.get("password") || undefined, role: form.get("role"), isActive: editing ? flag("active") : true, visibleReceiptDays: Number(form.get("days")), canViewReports: flag("reports"), canExportReports: flag("export"), canManageDevices: flag("devices"), canManageTeam: flag("team"), canConfirmReceipts: flag("confirm"), allWalletAccess: allWallets, walletIds: allWallets ? [] : form.getAll("wallets") } });
   }
   function changePassword(member: Member) {
     const password = window.prompt(`Enter a new temporary password for ${member.displayName} (at least 8 characters):`);
@@ -41,7 +41,7 @@ export default function TeamPage() {
       <div className="card-top"><div className="card-icon"><Users/></div><span className={`badge ${member.isActive ? "success" : "danger"}`}>{member.isActive ? "Active" : "Disabled"}</span></div>
       <h2>{member.displayName}</h2><p>{member.email}</p><p><strong>{member.role}</strong> · {member.visibleReceiptDays} days of history</p>
       <p><WalletCards size={14} className="inline-icon"/> {member.allWalletAccess ? "All wallets, including future wallets" : `${member.walletIds.length} selected wallet${member.walletIds.length === 1 ? "" : "s"}`}</p>
-      <p>{member.canViewReports ? "Reports" : "No reports"}{member.canExportReports ? " + export" : ""} · {member.canManageDevices ? "Devices" : "No device management"} · {member.canManageTeam ? "Team" : "No team management"}</p>
+      <p>{member.canViewReports ? "Reports" : "No reports"}{member.canExportReports ? " + export" : ""} · {member.canConfirmReceipts ? "Can confirm payments" : "No payment confirmation"} · {member.canManageDevices ? "Devices" : "No device management"} · {member.canManageTeam ? "Team" : "No team management"}</p>
       {member.canEdit && <div className="button-row" style={{ marginTop: 14 }}><button className="btn btn-secondary btn-small" onClick={() => openEdit(member)}><Edit3 size={15}/>Edit access</button><button className="btn btn-secondary btn-small" onClick={() => changePassword(member)}><KeyRound size={15}/>Reset password</button></div>}
     </article>)}</div>
     {!team.isLoading && (team.data ?? []).length === 0 && <div className="empty"><div><Users/><h2>No team members</h2></div></div>}
@@ -57,7 +57,7 @@ export default function TeamPage() {
         <div className="segmented"><button type="button" className={allWallets ? "active" : ""} onClick={() => setAllWallets(true)}>All wallets</button><button type="button" className={!allWallets ? "active" : ""} onClick={() => setAllWallets(false)}>Selected wallets</button></div>
         {!allWallets && <div className="wallet-picker">{(wallets.data ?? []).map((wallet) => <label className="checkbox" key={wallet.id}><input type="checkbox" name="wallets" value={wallet.id} defaultChecked={editing?.walletIds.includes(wallet.id)}/><span><strong>{wallet.name}</strong><small>{wallet.provider}</small></span></label>)}{(wallets.data ?? []).length === 0 && <p className="muted">Create a wallet first, or use All wallets.</p>}</div>}
       </div>
-      <p className="eyebrow">Additional permissions</p><div className="permission-grid">{[["reports", "View reports", editing?.canViewReports], ["export", "Export reports", editing?.canExportReports], ["devices", "Manage devices", editing?.canManageDevices], ["team", "Manage lower-role team members", editing?.canManageTeam]].map(([name, label, checked]) => <label className="checkbox" key={String(name)}><input type="checkbox" name={String(name)} defaultChecked={Boolean(checked)}/>{String(label)}</label>)}</div>
+      <p className="eyebrow">Additional permissions</p><div className="permission-grid">{[["confirm", "Confirm pending payments", editing?.canConfirmReceipts], ["reports", "View reports", editing?.canViewReports], ["export", "Export reports", editing?.canExportReports], ["devices", "Manage devices", editing?.canManageDevices], ["team", "Manage lower-role team members", editing?.canManageTeam]].map(([name, label, checked]) => <label className="checkbox" key={String(name)}><input type="checkbox" name={String(name)} defaultChecked={Boolean(checked)}/>{String(label)}</label>)}</div>
       {save.error && <div className="error" style={{ marginTop: 12 }}>{save.error.message}</div>}
       <div className="button-row" style={{ marginTop: 18 }}><button className="btn" disabled={save.isPending}><ShieldCheck size={17}/>{save.isPending ? "Saving…" : editing ? "Save changes" : "Create access"}</button><button type="button" className="btn btn-secondary" onClick={() => setEditing(undefined)}>Cancel</button></div>
     </form></div>}

@@ -185,21 +185,7 @@ export default function PairDevicePage() {
               {status.deviceId}
             </div>
             <div className="card" style={{ marginTop: 14 }}>
-              <StatusRow
-                label="Notification permission (Binance)"
-                ok={status.notificationAccess}
-              />
-              <StatusRow label="SMS permission (Vodafone + InstaPay)" ok={status.smsAccess} />
-              <StatusRow
-                label="Listener connected"
-                ok={Boolean(status.listenerConnectedAt)}
-                value={time(status.listenerConnectedAt)}
-              />
-              <StatusRow
-                label="Last notification seen"
-                ok={Boolean(status.lastNotificationAt)}
-                value={time(status.lastNotificationAt)}
-              />
+              <StatusRow label="SMS permission (Vodafone Cash + InstaPay)" ok={status.smsAccess} />
               <StatusRow
                 label="Last SMS checked"
                 ok={Boolean(status.lastSmsAt)}
@@ -230,29 +216,6 @@ export default function PairDevicePage() {
               </button>
             )}
             {!status.batteryOptimizationIgnored && <div className="notice" style={{ marginTop: 14 }}><strong>Keep capture reliable:</strong> set Wallets Hub battery use to Unrestricted so Android does not stop background SMS uploads.<button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openBatterySettings()}>Open battery settings</button></div>}
-            {!status.notificationAccess && (
-              <>
-                <div className="notice" style={{ marginTop: 14 }}>
-                  <strong>Android 13–16:</strong> Open App settings, use the
-                  top-right menu to allow restricted settings, then enable
-                  Notification access.
-                </div>
-                <div className="button-row" style={{ marginTop: 12 }}>
-                  <button
-                    className="btn"
-                    onClick={() => WalletCapture.openAppSettings()}
-                  >
-                    1. App settings
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => WalletCapture.openNotificationAccess()}
-                  >
-                    2. Notification access
-                  </button>
-                </div>
-              </>
-            )}
             <button
               className="btn btn-secondary btn-wide"
               style={{ marginTop: 12 }}
@@ -262,8 +225,8 @@ export default function PairDevicePage() {
               Refresh status
             </button>
             <p className="muted" style={{ textAlign: "center" }}>
-              <ShieldCheck size={15} /> Only matching incoming-payment SMS or
-              notifications are uploaded.
+              <ShieldCheck size={15} /> Only matching incoming Vodafone Cash
+              and InstaPay SMS messages are uploaded.
             </p>
           </div>
         )}

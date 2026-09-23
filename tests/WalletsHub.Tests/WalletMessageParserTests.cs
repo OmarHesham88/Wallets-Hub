@@ -24,7 +24,6 @@ public sealed class WalletMessageParserTests
     [InlineData("Vodafone Cash: You received EGP 1,250.50 from 01012345678. Transaction ID 778899", "Vodafone Cash", 1250.50, "EGP")]
     [InlineData("Orange Cash money received: 500 EGP from 01123456789 ref: ORG-7788", "Orange Cash", 500, "EGP")]
     [InlineData("Etisalat Cash: received 80 EGP from 01212345678", "e& Cash", 80, "EGP")]
-    [InlineData("WE Pay received USD 25 from 01512345678", "WE Pay", 25, "USD")]
     [InlineData("InstaPay account credited by 950 EGP from 01098765432", "InstaPay", 950, "EGP")]
     public void Parses_supported_incoming_formats(string message, string provider, decimal amount, string currency)
     {
@@ -57,30 +56,11 @@ public sealed class WalletMessageParserTests
         Assert.Equal("023227566038", parsed.Reference);
     }
 
-    [Fact]
-    public void Parses_binance_usdt_notification()
-    {
-        const string message = "Binance You have received a payment You have received a payment of 1 USDT from otify on 2026-08-31 16:10:56(UTC)";
-        Assert.True(WalletMessageParser.TryParse("com.binance.dev", message, out var parsed));
-        Assert.Equal("Binance", parsed.Provider);
-        Assert.Equal(1m, parsed.Amount);
-        Assert.Equal("USDT", parsed.CurrencyCode);
-        Assert.Equal("otify", parsed.Sender);
-    }
-
     [Theory]
-    [InlineData("Binance You have received a payment You have received a payment of 19 USDT from Boubacar naty on 2026-09-02 12:12:14(UTC)", 19, "Boubacar naty")]
-    [InlineData("Binance You have received a payment You have received a payment of 460.5 USDT from Jonna Ranieri jDPp on 2026-09-01 18:49:24(UTC)", 460.5, "Jonna Ranieri jDPp")]
-    [InlineData("Binance You have received a payment You have received a payment of 1041.66 USDT from شكري في on 2026-09-02 10:47:01(UTC)", 1041.66, "شكري في")]
-    [InlineData("Binance You have received a payment You have received a payment of 1041.66 USDT from \u200Fشكري في\u200E on 2026-09-02 10:47:01(UTC)", 1041.66, "شكري في")]
-    public void Parses_full_binance_sender_names_in_latin_and_arabic(string message, decimal amount, string sender)
-    {
-        Assert.True(WalletMessageParser.TryParse("com.binance.dev", message, out var parsed));
-        Assert.Equal("Binance", parsed.Provider);
-        Assert.Equal(amount, parsed.Amount);
-        Assert.Equal("USDT", parsed.CurrencyCode);
-        Assert.Equal(sender, parsed.Sender);
-    }
+    [InlineData("Binance You have received a payment of 19 USDT from Boubacar naty", "com.binance.dev")]
+    [InlineData("WE Pay received USD 25 from 01512345678", null)]
+    public void Rejects_non_egp_payments(string message, string? source) =>
+        Assert.False(WalletMessageParser.TryParse(source, message, out _));
 
     [Theory]
     [InlineData("com.samsung.android.messaging", "Vodafone Cash: You received EGP 10 from 01012345678")]

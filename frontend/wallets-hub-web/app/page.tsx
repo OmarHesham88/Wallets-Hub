@@ -20,21 +20,21 @@ export default function LandingPage() {
       <div className="landing-hero-copy">
         <span className="landing-kicker"><span className="status-dot"/>{t("Built for real payment operations")}</span>
         <h1>{t("Wallet operations without blind spots.")}</h1>
-        <p>{t("Capture Vodafone Cash and InstaPay SMS messages, monitor Binance notifications, and give every employee exactly the access they need.")}</p>
+        <p>{t("Capture Vodafone Cash and InstaPay SMS messages and give every employee exactly the access they need.")}</p>
         <div className="landing-cta"><Link className="btn landing-primary" href="/login">{t("Start managing")}<ArrowRight size={18}/></Link><a className="btn btn-secondary" href="#pricing">{t("See pricing")}</a></div>
         <div className="landing-trust"><span><ShieldCheck size={17}/>{t("Organization-isolated")}</span><span><BellRing size={17}/>{t("Instant reporting")}</span></div>
       </div>
       <div className="product-preview" aria-label="Wallets Hub product preview">
         <div className="preview-top"><div><span/><span/><span/></div><strong>{t("Live operations")}</strong><span className="badge success">{t("Live capture")}</span></div>
         <div className="preview-stats"><article><small>{t("Received today · EGP")}</small><strong>EGP 24,850</strong><span>+18.4%</span></article><article><small>{t("Payments")}</small><strong>127</strong><span>{t("Today")}</span></article></div>
-        <div className="preview-list"><div><span className="preview-icon"><MessageSquareText/></span><p><strong>EGP 1,250</strong><small>Vodafone Cash · 010••••4687</small></p><time>10:28</time></div><div><span className="preview-icon"><Smartphone/></span><p><strong>EGP 780</strong><small>InstaPay · Branch device</small></p><time>10:21</time></div><div><span className="preview-icon"><WalletCards/></span><p><strong>USDT 95</strong><small>Binance · Main wallet</small></p><time>10:16</time></div></div>
+        <div className="preview-list"><div><span className="preview-icon"><MessageSquareText/></span><p><strong>EGP 1,250</strong><small>Vodafone Cash · 010••••4687</small></p><time>10:28</time></div><div><span className="preview-icon"><Smartphone/></span><p><strong>EGP 780</strong><small>InstaPay · Branch device</small></p><time>10:21</time></div><div><span className="preview-icon"><WalletCards/></span><p><strong>EGP 420</strong><small>Vodafone Cash · Main wallet</small></p><time>10:16</time></div></div>
       </div>
     </section>
 
     <section className="landing-section" id="features">
       <div className="landing-section-heading"><span className="eyebrow">Wallets Hub</span><h2>{t("Every receipt. Every device. One clear view.")}</h2></div>
       <div className="landing-feature-grid">
-        <article><span><Smartphone/></span><h3>{t("Automatic capture")}</h3><p>{t("Vodafone Cash and InstaPay from SMS, plus Binance payments from notifications.")}</p></article>
+        <article><span><Smartphone/></span><h3>{t("Automatic capture")}</h3><p>{t("Vodafone Cash and InstaPay payments captured directly from SMS.")}</p></article>
         <article><span><UsersRound/></span><h3>{t("Controlled access")}</h3><p>{t("Assign all wallets or only selected wallets to each employee.")}</p></article>
         <article><span><BarChart3/></span><h3>{t("Operational reports")}</h3><p>{t("Filter, export, reconcile, and understand every received payment.")}</p></article>
       </div>

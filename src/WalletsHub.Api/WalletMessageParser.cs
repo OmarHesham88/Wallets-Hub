@@ -16,11 +16,10 @@ public static partial class WalletMessageParser
         new("e& Cash", ["e& cash", "etisalat cash", "اتصالات كاش", "إي آند كاش"]),
         new("WE Pay", ["we pay", "wepay", "وي باي"]),
         new("InstaPay", ["instapay", "انستاباي", "إنستاباي"]),
-        new("Binance", ["binance"]),
         new("Bank transfer", ["bank transfer", "account credited", "تم اضافة مبلغ", "تم إضافة مبلغ", "تحويل بنكي"])
     ];
 
-    [GeneratedRegex(@"(?:usdt|egp|usd|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|دولار|l\.e)\s*[:\-]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)|([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usdt|egp|usd|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|دولار|l\.e)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:egp|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|l\.e)\s*[:\-]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)|([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:egp|جنيه(?:اً|ا)?(?:\s*مصري)?|ج\.?\s*م\.?|l\.e)", RegexOptions.IgnoreCase)]
     private static partial Regex AmountPattern();
     [GeneratedRegex(@"(?:\+?20)?01[0125][0-9]{8}")] private static partial Regex PhonePattern();
     [GeneratedRegex(@"(?:reference|ref|transaction\s*(?:id|number)|رقم\s*العملية|رقم\s*مرجع(?:ي)?|مرجع(?:ي)?)\s*[:#\-]?\s*([a-z0-9\-]{4,})", RegexOptions.IgnoreCase)]
@@ -53,8 +52,7 @@ public static partial class WalletMessageParser
         if (package.Length > 0)
         {
             var sms = package == "android.sms";
-            if (sms && provider.Name is not ("Vodafone Cash" or "InstaPay")) return false;
-            if (!sms && provider.Name != "Binance") return false;
+            if (!sms || provider.Name is not ("Vodafone Cash" or "InstaPay")) return false;
         }
 
         var incoming = new[] { "received", "money received", "credited", "تم استلام", "استلمت", "تم تحويل مبلغ", "تم إيداع", "تم ايداع", "تم إضافة", "تم اضافة", "حوالة واردة", "تحويل وارد", "من رقم", " from " }.Any(normalized.Contains);
@@ -67,8 +65,7 @@ public static partial class WalletMessageParser
         var amountText = amountMatch.Groups[1].Success ? amountMatch.Groups[1].Value : amountMatch.Groups[2].Value;
         if (!decimal.TryParse(amountText.Replace(",", ""), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var amount) || amount <= 0) return false;
 
-        var currency = amountMatch.Value.Contains("usdt", StringComparison.OrdinalIgnoreCase) ? "USDT"
-            : amountMatch.Value.Contains("usd", StringComparison.OrdinalIgnoreCase) || amountMatch.Value.Contains("دولار", StringComparison.OrdinalIgnoreCase) ? "USD" : "EGP";
+        const string currency = "EGP";
         var phones = PhonePattern().Matches(Regex.Replace(text, @"[\s\-()]", "")).Select(x => x.Value).Distinct().ToList();
         var destinationMatch = DestinationPattern().Match(text);
         var destination = destinationMatch.Success ? destinationMatch.Groups[1].Value : phones.Skip(1).FirstOrDefault();

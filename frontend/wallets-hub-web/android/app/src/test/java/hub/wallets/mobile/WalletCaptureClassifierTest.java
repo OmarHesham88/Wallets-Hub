@@ -17,11 +17,4 @@ public class WalletCaptureClassifierTest {
         assertFalse(WalletCaptureClassifier.isSmsCandidate("Bank", "Your verification code is 123456"));
     }
 
-    @Test public void recognizesBinanceUsdtNotification() {
-        assertTrue(WalletCaptureClassifier.isBinanceCandidate("com.binance.dev", "You have received a payment", "You have received a payment of 19 USDT from Nadia"));
-    }
-
-    @Test public void rejectsOtherNotifications() {
-        assertFalse(WalletCaptureClassifier.isBinanceCandidate("com.example", "Payment", "Received 19 EGP"));
-    }
 }

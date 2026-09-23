@@ -74,6 +74,7 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
             e.Property(x => x.Fingerprint).HasMaxLength(128);
             e.HasIndex(x => new { x.DeviceId, x.Fingerprint }).IsUnique();
             e.HasIndex(x => new { x.OrganizationId, x.ReceivedAtUtc });
+            e.HasIndex(x => new { x.OrganizationId, x.Status, x.ReceivedAtUtc });
             e.HasIndex(x => new { x.OrganizationId, x.WalletId, x.ReceivedAtUtc });
             e.HasIndex(x => new { x.OrganizationId, x.DeviceId, x.ReceivedAtUtc });
             e.HasIndex(x => new { x.OrganizationId, x.CurrencyCode, x.ReceivedAtUtc });
