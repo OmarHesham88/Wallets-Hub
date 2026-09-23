@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { ArrowRight, CheckCircle2, LayoutDashboard, LogIn, RefreshCw, ShieldCheck, Smartphone } from "lucide-react";
 import { api, appPath, User } from "@/lib/api";
 import { CaptureStatus, isNative, WalletCapture } from "@/lib/wallet-native";
+import { LanguageToggle } from "@/components/i18n";
 type PairResponse = {
   deviceId: string;
   deviceToken: string;
@@ -91,7 +92,7 @@ export default function PairDevicePage() {
   }
   if (!isNative())
     return (
-      <main className="login-panel">
+      <main className="login-panel"><div className="login-language"><LanguageToggle/></div>
         <div className="login-card">
           <Image
             src={appPath("/wallets-hub-logo.png")}
@@ -111,7 +112,7 @@ export default function PairDevicePage() {
       </main>
     );
   return (
-    <main className="login-panel">
+    <main className="login-panel"><div className="login-language"><LanguageToggle/></div>
       <div className="login-card">
         <div className="login-brand">
           <Image

@@ -24,6 +24,7 @@ import {
 import { useState } from "react";
 import { api, appPath, User } from "@/lib/api";
 import { useIsNative } from "@/lib/wallet-native";
+import { LanguageToggle, useI18n } from "@/components/i18n";
 
 const organizationLinks = [
   ["/dashboard", "Overview", LayoutDashboard],
@@ -40,6 +41,7 @@ const organizationLinks = [
 ] as const;
 
 export function Shell({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   const path = usePathname();
   const router = useRouter();
   const client = useQueryClient();
@@ -105,7 +107,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           />
           <div>
             <strong>Wallets Hub</strong>
-            <span>{me.data?.organizationName ?? "Platform console"}</span>
+            <span>{me.data?.organizationName ?? t("Platform console")}</span>
           </div>
           <button
             className="icon-button mobile-close"
@@ -123,7 +125,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               onClick={() => setOpen(false)}
             >
               <Icon size={19} />
-              {label}
+              {t(label)}
             </Link>
           ))}
         </nav>
@@ -132,12 +134,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {me.data?.displayName?.slice(0, 1) ?? "W"}
           </span>
           <div>
-            <strong>{me.data?.displayName ?? "Loading…"}</strong>
-            <span>{me.data?.role}</span>
+            <strong>{me.data?.displayName ?? t("Loading…")}</strong>
+            <span>{t(me.data?.role ?? "")}</span>
           </div>
           <button
             className="icon-button"
-            title="Log out"
+            title={t("Log out")}
             onClick={async () => {
               await api("/api/auth/logout", { method: "POST" });
               client.clear();
@@ -149,14 +151,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <section className="workspace">
-        {me.data?.role !== "PlatformAdmin" && <header className="desktop-toolbar"><div><span className="status-dot"/>Live capture</div><Link className="notification-button" href="/notifications" title="Notifications"><Bell size={20}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link></header>}
+        <header className="desktop-toolbar"><LanguageToggle compact/>{me.data?.role !== "PlatformAdmin" && <><div><span className="status-dot"/>{t("Live capture")}</div><Link className="notification-button" href="/notifications" title={t("Notifications")}><Bell size={20}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link></>}</header>
         <header className="mobile-bar">
           <button className="icon-button" onClick={() => setOpen(true)}>
             <Menu />
           </button>
           <strong>Wallets Hub</strong>
-          {me.data?.role !== "PlatformAdmin" && <Link className="notification-button" href="/notifications" title="Notifications"><Bell size={19}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link>}
-          {native && <Link className="icon-button" style={{ marginLeft: "auto" }} href="/pair-device" title="This phone capture status"><Smartphone size={19}/></Link>}
+          <LanguageToggle compact/>
+          {me.data?.role !== "PlatformAdmin" && <Link className="notification-button" href="/notifications" title={t("Notifications")}><Bell size={19}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link>}
+          {native && <Link className="icon-button native-phone-link" href="/pair-device" title={t("This phone")}><Smartphone size={19}/></Link>}
         </header>
         <main>{children}</main>
       </section>

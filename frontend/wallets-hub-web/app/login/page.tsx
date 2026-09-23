@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, CheckCircle2, ShieldCheck, Smartphone } from "lucide-react";
 import { api, appPath, User } from "@/lib/api";
 import { useIsNative } from "@/lib/wallet-native";
+import { LanguageToggle, useI18n } from "@/components/i18n";
 
 export default function LoginPage() {
+  const { t } = useI18n();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -39,6 +41,7 @@ export default function LoginPage() {
   }
   return (
     <main className="login-page">
+      <div className="login-language"><LanguageToggle/></div>
       <section className="login-intro">
         <div className="login-brand">
           <span className="login-mark">
@@ -51,29 +54,25 @@ export default function LoginPage() {
           </span>
           <div>
             <strong>Wallets Hub</strong>
-            <span>Payment operations, clearly managed.</span>
+            <span>{t("Payment operations, clearly managed.")}</span>
           </div>
         </div>
         <div className="hero-copy">
-          <span className="eyebrow">One place for every wallet</span>
+          <span className="eyebrow">{t("One place for every wallet")}</span>
           <h1>
-            Know when money arrives.
-            <br />
-            See it in your reports instantly.
+            {t("Know when money arrives. See it in your reports instantly.")}
           </h1>
           <p>
-            Connect wallet phones, assign employee access, capture receipts, and
-            understand every EGP, USD, or USDT movement from a clean operational
-            dashboard.
+            {t("Connect wallet phones, assign employee access, capture receipts, and understand every EGP, USD, or USDT movement from a clean operational dashboard.")}
           </p>
           <div className="feature-row">
             <span>
               <ShieldCheck />
-              Organization-isolated
+              {t("Organization-isolated")}
             </span>
             <span>
               <CheckCircle2 />
-              Instant reporting
+              {t("Instant reporting")}
             </span>
           </div>
         </div>
@@ -91,17 +90,17 @@ export default function LoginPage() {
             </span>
             <div>
               <strong>Wallets Hub</strong>
-              <span>Payment operations, clearly managed.</span>
+              <span>{t("Payment operations, clearly managed.")}</span>
             </div>
           </div>
           {native && <a className="btn btn-secondary btn-small" style={{ marginBottom: 24 }} href={appPath("/pair-device")}><ArrowLeft size={15}/><Smartphone size={16}/>This phone</a>}
-          <span className="eyebrow">Secure workspace</span>
-          <h2>Welcome back</h2>
+          <span className="eyebrow">{t("Secure workspace")}</span>
+          <h2>{t("Welcome back")}</h2>
           <p>
-            Sign in with the account created by your Wallets Hub administrator.
+            {t("Sign in with the account created by your Wallets Hub administrator.")}
           </p>
           {!requiresTwoFactor && <label>
-            Email address
+            {t("Email address")}
             <input
               type="email"
               required
@@ -111,29 +110,28 @@ export default function LoginPage() {
             />
           </label>}
           {!requiresTwoFactor && <label>
-            Password
+            {t("Password")}
             <input
               type="password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Your password"
+              placeholder={t("Your password")}
             />
           </label>}
-          {requiresTwoFactor && <><div className="notice">Enter the current six-digit authenticator code, or one of your recovery codes.</div><label>Authenticator or recovery code<input required value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value.trim().slice(0, 32))} autoFocus autoComplete="one-time-code"/></label><button type="button" className="btn btn-secondary btn-small" onClick={() => { setRequiresTwoFactor(false); setTwoFactorCode(""); }}>Use another account</button></>}
+          {requiresTwoFactor && <><div className="notice">{t("Enter the current six-digit authenticator code, or one of your recovery codes.")}</div><label>{t("Authenticator or recovery code")}<input required value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value.trim().slice(0, 32))} autoFocus autoComplete="one-time-code"/></label><button type="button" className="btn btn-secondary btn-small" onClick={() => { setRequiresTwoFactor(false); setTwoFactorCode(""); }}>{t("Use another account")}</button></>}
           {error && <div className="error">{error}</div>}
           <button className="btn btn-wide" disabled={busy}>
             {busy ? (
               "Signing in…"
             ) : (
               <>
-                Sign in <ArrowRight size={18} />
+                {t("Sign in")} <ArrowRight size={18} />
               </>
             )}
           </button>
           <small>
-            Sessions stay securely signed in for up to one year unless you log
-            out.
+            {t("Sessions stay securely signed in for up to one year unless you log out.")}
           </small>
         </form>
       </section>
