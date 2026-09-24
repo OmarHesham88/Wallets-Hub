@@ -122,6 +122,7 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "BalanceLimit" numeric(18,4) NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastHeartbeatAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastSmsAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastAxisNotificationAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "LastCaptureAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "OfflineAlertSentAtUtc" timestamp with time zone NULL;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "AppVersion" character varying(40) NULL;
@@ -129,6 +130,7 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "PendingUploadCount" integer NOT NULL DEFAULT 0;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "FailedUploadCount" integer NOT NULL DEFAULT 0;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "SmsPermissionGranted" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "AxisNotificationAccessGranted" boolean NOT NULL DEFAULT false;
         ALTER TABLE "WalletDevices" ADD COLUMN IF NOT EXISTS "BatteryOptimizationIgnored" boolean NOT NULL DEFAULT false;
         CREATE TABLE IF NOT EXISTS "CaptureEvents" (
             "Id" uuid NOT NULL PRIMARY KEY, "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
@@ -558,7 +560,7 @@ static void MapDevices(WebApplication app)
         var user = await RequireOrganizationUser(principal, users);
         if (!user.CanManageDevices && !IsOrganizationAdmin(principal)) return Results.Forbid();
         return Results.Ok(await db.WalletDevices.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId).OrderByDescending(x => x.IsActive).ThenByDescending(x => x.LastSeenAtUtc)
-            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, x.LastHeartbeatAtUtc, x.LastSmsAtUtc, x.LastCaptureAtUtc, x.AppVersion, x.AndroidVersion, x.PendingUploadCount, x.FailedUploadCount, x.SmsPermissionGranted, x.BatteryOptimizationIgnored, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id && w.IsActive) }).ToListAsync());
+            .Select(x => new { x.Id, x.Name, x.Platform, x.IsActive, x.PairedAtUtc, x.LastSeenAtUtc, x.LastHeartbeatAtUtc, x.LastSmsAtUtc, x.LastAxisNotificationAtUtc, x.LastCaptureAtUtc, x.AppVersion, x.AndroidVersion, x.PendingUploadCount, x.FailedUploadCount, x.SmsPermissionGranted, x.AxisNotificationAccessGranted, x.BatteryOptimizationIgnored, WalletCount = db.Wallets.Count(w => w.DeviceId == x.Id && w.IsActive) }).ToListAsync());
     }).RequireAuthorization();
     devices.MapPost("/pairing", async (DevicePairingRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -593,8 +595,10 @@ static void MapDevices(WebApplication app)
         device.PendingUploadCount = Math.Clamp(request.PendingUploadCount, 0, 100000);
         device.FailedUploadCount = Math.Clamp(request.FailedUploadCount, 0, 100000);
         device.SmsPermissionGranted = request.SmsPermissionGranted;
+        device.AxisNotificationAccessGranted = request.AxisNotificationAccessGranted;
         device.BatteryOptimizationIgnored = request.BatteryOptimizationIgnored;
         if (request.LastSmsAtUtc.HasValue) device.LastSmsAtUtc = request.LastSmsAtUtc.Value.ToUniversalTime();
+        if (request.LastAxisNotificationAtUtc.HasValue) device.LastAxisNotificationAtUtc = request.LastAxisNotificationAtUtc.Value.ToUniversalTime();
         if (device.OfflineAlertSentAtUtc.HasValue) device.OfflineAlertSentAtUtc = null;
         await db.SaveChangesAsync(); return Results.NoContent();
     });
@@ -1312,7 +1316,7 @@ public sealed record WalletRequest(string Name, string Provider, string AccountN
 public sealed record DevicePairingRequest(string Name);
 public sealed record PairDeviceRequest(string PairingCode, string InstallationId);
 public sealed record UpdateDeviceRequest(string Name, bool IsActive);
-public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidVersion, int PendingUploadCount, int FailedUploadCount, bool SmsPermissionGranted, bool BatteryOptimizationIgnored, DateTime? LastSmsAtUtc);
+public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidVersion, int PendingUploadCount, int FailedUploadCount, bool SmsPermissionGranted, bool AxisNotificationAccessGranted, bool BatteryOptimizationIgnored, DateTime? LastSmsAtUtc, DateTime? LastAxisNotificationAtUtc);
 public sealed record CaptureRequest(Guid? WalletId, string? SourcePackage, string? Title, string? Body, DateTime ReceivedAtUtc, string Fingerprint);
 public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
 public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);

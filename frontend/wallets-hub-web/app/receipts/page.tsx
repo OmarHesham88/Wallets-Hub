@@ -88,7 +88,7 @@ export default function ReceiptsPage() {
           </div>
         </details>
 
-        <label className="select-control"><span>Provider</span><select value={filters.provider} onChange={(event) => set("provider", event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option></select></label>
+        <label className="select-control"><span>Provider</span><select value={filters.provider} onChange={(event) => set("provider", event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option><option>Axis</option><option>Orange Cash</option><option>e&amp; Cash</option></select></label>
         <label className="select-control"><span>Device</span><select value={filters.deviceId} onChange={(event) => set("deviceId", event.target.value)}><option value="">All devices</option>{(devices.data ?? []).map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
       </div>
 

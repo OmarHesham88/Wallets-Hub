@@ -77,6 +77,40 @@ public sealed class WalletMessageParserTests
     }
 
     [Theory]
+    [InlineData("com.axispay.consumer.wallet", "You have received EGP 250.50 from 01012345678. Transaction ID AX-778899", 250.50, "01012345678", "AX-778899")]
+    [InlineData("com.axispay.consumer.wallet", "تم استلام مبلغ ١٢٠٫٥٠ جنيه من رقم 01098765432 رقم العملية 998877", 120.50, "01098765432", "998877")]
+    [InlineData("com.axispay.consumer.wallet", "EGP 75 was added to your wallet from Ahmed", 75, "Ahmed", null)]
+    public void Parses_axis_incoming_notifications(string source, string message, decimal amount, string? sender, string? reference)
+    {
+        Assert.True(WalletMessageParser.TryParse(source, message, out var parsed));
+        Assert.Equal("Axis", parsed.Provider);
+        Assert.Equal(amount, parsed.Amount);
+        Assert.Equal(sender, parsed.Sender);
+        Assert.Equal(reference, parsed.Reference);
+    }
+
+    [Theory]
+    [InlineData("android.sms", "Orange Cash: You received 500 EGP from 01234567890 ref ORG7788", "Orange Cash", 500)]
+    [InlineData("android.sms", "اورنج كاش تم استلام مبلغ ٢٥٠ جنيه من رقم 01234567890 رقم العملية 887766", "Orange Cash", 250)]
+    [InlineData("android.sms", "e& money: Your wallet was credited with EGP 80 from 01123456789 transaction number ET55", "e& Cash", 80)]
+    [InlineData("android.sms", "اتصالات كاش تم إضافة مبلغ ٩٠ ج.م من رقم 01123456789 رقم مرجعي 556677", "e& Cash", 90)]
+    public void Parses_orange_and_eand_incoming_sms(string source, string message, string provider, decimal amount)
+    {
+        Assert.True(WalletMessageParser.TryParse(source, message, out var parsed));
+        Assert.Equal(provider, parsed.Provider);
+        Assert.Equal(amount, parsed.Amount);
+    }
+
+    [Theory]
+    [InlineData("android.sms", "Axis Wallet: You received EGP 10 from 01012345678")]
+    [InlineData("com.axispay.consumer.wallet", "You sent EGP 10 to 01012345678")]
+    [InlineData("com.axispay.consumer.wallet", "Your wallet balance is EGP 500")]
+    [InlineData("com.android.systemui", "Axis Wallet: You received EGP 10 from 01012345678")]
+    [InlineData("com.orange.cash", "Orange Cash: You received EGP 10 from 01012345678")]
+    public void Rejects_new_providers_on_wrong_channel_or_non_incoming(string source, string message) =>
+        Assert.False(WalletMessageParser.TryParse(source, message, out _));
+
+    [Theory]
     [InlineData("تم إضافة تحويل لحظي لبطاقتكم مسبقة الدفع بمبلغ 300.00 جم من هدير ابراهيم عبدالدايم سليمان حسن عمار رقم مرجعي 639896513920 يوم 31-08 الساعة 19:43 للمزيد اتصل ب 19623", 300, "هدير ابراهيم عبدالدايم سليمان حسن عمار", "639896513920")]
     [InlineData("تم إضافة تحويل لحظي لبطاقتكم مسبقة الدفع بمبلغ 5.00 جم من NADIA HISHAM MOHAMED رقم مرجعي 510786897432 يوم 31-08 الساعة 20:28 للمزيد اتصل ب 19623", 5, "NADIA HISHAM MOHAMED", "510786897432")]
     public void Parses_instant_card_transfer_sms_as_instapay(string message, decimal amount, string sender, string reference)

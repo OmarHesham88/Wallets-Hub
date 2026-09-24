@@ -20,7 +20,7 @@ export default function LandingPage() {
       <div className="landing-hero-copy">
         <span className="landing-kicker"><span className="status-dot"/>{t("Built for real payment operations")}</span>
         <h1>{t("Wallet operations without blind spots.")}</h1>
-        <p>{t("Capture Vodafone Cash and InstaPay SMS messages and give every employee exactly the access they need.")}</p>
+        <p>{t("Capture Axis, Vodafone Cash, InstaPay, Orange Cash, and e& Cash payments and give every employee exactly the access they need.")}</p>
         <div className="landing-cta"><Link className="btn landing-primary" href="/login">{t("Start managing")}<ArrowRight size={18}/></Link><a className="btn btn-secondary" href="#pricing">{t("See pricing")}</a></div>
         <div className="landing-trust"><span><ShieldCheck size={17}/>{t("Organization-isolated")}</span><span><BellRing size={17}/>{t("Instant reporting")}</span></div>
       </div>
@@ -34,7 +34,7 @@ export default function LandingPage() {
     <section className="landing-section" id="features">
       <div className="landing-section-heading"><span className="eyebrow">Wallets Hub</span><h2>{t("Every receipt. Every device. One clear view.")}</h2></div>
       <div className="landing-feature-grid">
-        <article><span><Smartphone/></span><h3>{t("Automatic capture")}</h3><p>{t("Vodafone Cash and InstaPay payments captured directly from SMS.")}</p></article>
+        <article><span><Smartphone/></span><h3>{t("Automatic capture")}</h3><p>{t("Wallet payments captured from SMS, plus secure Axis notification capture.")}</p></article>
         <article><span><UsersRound/></span><h3>{t("Controlled access")}</h3><p>{t("Assign all wallets or only selected wallets to each employee.")}</p></article>
         <article><span><BarChart3/></span><h3>{t("Operational reports")}</h3><p>{t("Filter, export, reconcile, and understand every received payment.")}</p></article>
       </div>

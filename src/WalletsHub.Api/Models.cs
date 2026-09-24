@@ -73,6 +73,7 @@ public sealed class WalletDevice
     public DateTime? LastSeenAtUtc { get; set; }
     public DateTime? LastHeartbeatAtUtc { get; set; }
     public DateTime? LastSmsAtUtc { get; set; }
+    public DateTime? LastAxisNotificationAtUtc { get; set; }
     public DateTime? LastCaptureAtUtc { get; set; }
     public DateTime? OfflineAlertSentAtUtc { get; set; }
     public string? AppVersion { get; set; }
@@ -80,6 +81,7 @@ public sealed class WalletDevice
     public int PendingUploadCount { get; set; }
     public int FailedUploadCount { get; set; }
     public bool SmsPermissionGranted { get; set; }
+    public bool AxisNotificationAccessGranted { get; set; }
     public bool BatteryOptimizationIgnored { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
