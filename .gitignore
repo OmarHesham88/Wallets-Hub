@@ -14,3 +14,5 @@
 *.apk
 *.aab
 .android-signing.local.txt
+firebase-secrets/
+**/google-services.json
