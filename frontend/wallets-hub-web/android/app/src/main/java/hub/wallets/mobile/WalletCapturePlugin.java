@@ -12,6 +12,7 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.Telephony;
 import androidx.core.content.ContextCompat;
+import androidx.core.app.NotificationManagerCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -31,6 +32,7 @@ public class WalletCapturePlugin extends Plugin {
     static final String API_URL = "api_url";
     static final String LAST_WALLET_MATCH_AT = "last_wallet_match_at";
     static final String LAST_SMS_AT = "last_sms_at";
+    static final String LAST_AXIS_NOTIFICATION_AT = "last_axis_notification_at";
     static final String PENDING_UPLOADS = "pending_uploads";
     static final String FAILED_UPLOADS = "failed_uploads";
 
@@ -53,6 +55,8 @@ public class WalletCapturePlugin extends Plugin {
         result.put("smsAccess", ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
             && ContextCompat.checkSelfPermission(getContext(), Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED);
         result.put("lastSmsAt", preferences.getLong(LAST_SMS_AT, 0));
+        result.put("axisNotificationAccess", NotificationManagerCompat.getEnabledListenerPackages(getContext()).contains(getContext().getPackageName()));
+        result.put("lastAxisNotificationAt", preferences.getLong(LAST_AXIS_NOTIFICATION_AT, 0));
         result.put("lastWalletMatchAt", preferences.getLong(LAST_WALLET_MATCH_AT, 0));
         PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
         result.put("batteryOptimizationIgnored", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
@@ -77,6 +81,12 @@ public class WalletCapturePlugin extends Plugin {
     @PluginMethod
     public void openAppSettings(PluginCall call) {
         Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); getContext().startActivity(intent); call.resolve();
+    }
+
+    @PluginMethod
+    public void openNotificationAccessSettings(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); getContext().startActivity(intent); call.resolve();
     }
 

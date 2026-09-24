@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.PowerManager;
 import androidx.annotation.NonNull;
 import androidx.core.content.ContextCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.NetworkType;
@@ -54,9 +55,11 @@ public class WalletHeartbeatWorker extends Worker {
             body.put("pendingUploadCount", pending);
             body.put("failedUploadCount", preferences.getInt(WalletCapturePlugin.FAILED_UPLOADS, 0));
             body.put("smsPermissionGranted", ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED);
+            body.put("axisNotificationAccessGranted", NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.getPackageName()));
             PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
             body.put("batteryOptimizationIgnored", power != null && power.isIgnoringBatteryOptimizations(context.getPackageName()));
             putTime(body, "lastSmsAtUtc", preferences.getLong(WalletCapturePlugin.LAST_SMS_AT, 0));
+            putTime(body, "lastAxisNotificationAtUtc", preferences.getLong(WalletCapturePlugin.LAST_AXIS_NOTIFICATION_AT, 0));
             byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
             connection = (HttpURLConnection) new URL(api + "/api/devices/heartbeat").openConnection(); connection.setRequestMethod("POST"); connection.setConnectTimeout(15000); connection.setReadTimeout(15000); connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "application/json"); connection.setRequestProperty("X-Wallet-Device-Token", token); connection.setFixedLengthStreamingMode(payload.length);
             try (OutputStream stream = connection.getOutputStream()) { stream.write(payload); }

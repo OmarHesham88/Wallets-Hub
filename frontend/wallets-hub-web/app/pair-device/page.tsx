@@ -68,7 +68,7 @@ export default function PairDevicePage() {
       const permission = await WalletCapture.requestPermissions({ permissions: ["sms"] });
       if (permission.sms !== "granted") throw new Error("SMS access was not allowed. Please enable it in App settings.");
       const result = await WalletCapture.scanRecentSms();
-      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash/InstaPay receipt(s).`);
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} supported wallet receipt(s).`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -82,7 +82,7 @@ export default function PairDevicePage() {
     setSmsResult("");
     try {
       const result = await WalletCapture.scanRecentSms();
-      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} Vodafone Cash/InstaPay receipt(s).`);
+      setSmsResult(`Checked ${result.checked} recent SMS messages and found ${result.matched} supported wallet receipt(s).`);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -185,12 +185,14 @@ export default function PairDevicePage() {
               {status.deviceId}
             </div>
             <div className="card" style={{ marginTop: 14 }}>
-              <StatusRow label="SMS permission (Vodafone Cash + InstaPay)" ok={status.smsAccess} />
+              <StatusRow label="SMS access (Vodafone, InstaPay, Orange, e& Cash)" ok={status.smsAccess} />
               <StatusRow
                 label="Last SMS checked"
                 ok={Boolean(status.lastSmsAt)}
                 value={time(status.lastSmsAt)}
               />
+              <StatusRow label="Axis notification access" ok={status.axisNotificationAccess} />
+              <StatusRow label="Last Axis notification checked" ok={Boolean(status.lastAxisNotificationAt)} value={time(status.lastAxisNotificationAt)} />
               <StatusRow
                 label="Last wallet match"
                 ok={Boolean(status.lastWalletMatchAt)}
@@ -215,6 +217,12 @@ export default function PairDevicePage() {
                 Scan SMS from the last 30 days
               </button>
             )}
+            {!status.axisNotificationAccess && (
+              <div className="notice" style={{ marginTop: 14 }}>
+                <strong>Enable Axis capture:</strong> open notification access and allow Wallets Hub. Only notifications posted by the official Axis app are inspected.
+                <button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openNotificationAccessSettings()}>Open notification access</button>
+              </div>
+            )}
             {!status.batteryOptimizationIgnored && <div className="notice" style={{ marginTop: 14 }}><strong>Keep capture reliable:</strong> set Wallets Hub battery use to Unrestricted so Android does not stop background SMS uploads.<button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openBatterySettings()}>Open battery settings</button></div>}
             <button
               className="btn btn-secondary btn-wide"
@@ -225,8 +233,7 @@ export default function PairDevicePage() {
               Refresh status
             </button>
             <p className="muted" style={{ textAlign: "center" }}>
-              <ShieldCheck size={15} /> Only matching incoming Vodafone Cash
-              and InstaPay SMS messages are uploaded.
+              <ShieldCheck size={15} /> Only matching incoming wallet SMS messages and official Axis app notifications are uploaded.
             </p>
           </div>
         )}

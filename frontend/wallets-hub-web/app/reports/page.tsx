@@ -42,7 +42,7 @@ export default function ReportsPage() {
         <div className="date-filter"><input aria-label="Report start date" type="date" value={from} onChange={(event) => setFrom(event.target.value)}/><span>—</span><input aria-label="Report end date" type="date" value={to} onChange={(event) => setTo(event.target.value)}/></div>
         <label className="select-control"><span>Wallet</span><select value={walletId} onChange={(event) => setWalletId(event.target.value)}><option value="">All wallets</option>{(wallets.data ?? []).map((wallet) => <option key={wallet.id} value={wallet.id}>{wallet.name}</option>)}</select></label>
         <label className="select-control"><span>Device</span><select value={deviceId} onChange={(event) => setDeviceId(event.target.value)}><option value="">All devices</option>{(devices.data ?? []).map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
-        <label className="select-control"><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option></select></label>
+        <label className="select-control"><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="">All providers</option><option>Vodafone Cash</option><option>InstaPay</option><option>Axis</option><option>Orange Cash</option><option>e&amp; Cash</option></select></label>
       </div>
     </section>
     {report.error && <div className="error report-error"><span>{report.error.message}</span><button type="button" onClick={() => report.refetch()}>Try again</button></div>}

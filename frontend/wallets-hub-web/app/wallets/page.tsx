@@ -9,7 +9,7 @@ import { api, money, User } from "@/lib/api";
 
 type Wallet = { id: string; name: string; provider: string; accountNumber: string; currencyCode: string; deviceId?: string; isActive: boolean; openingBalance: number; balanceLimit?: number; currentBalance: number };
 type Device = { id: string; name: string; isActive: boolean };
-const providers = ["Vodafone Cash", "InstaPay"];
+const providers = ["Vodafone Cash", "InstaPay", "Axis", "Orange Cash", "e& Cash"];
 
 export default function WalletsPage() {
   const client = useQueryClient(); const [editing, setEditing] = useState<Wallet | null | undefined>(undefined); const [provider, setProvider] = useState("Vodafone Cash");
