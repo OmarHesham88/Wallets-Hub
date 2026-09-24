@@ -18,14 +18,16 @@ type PairResponse = {
 };
 export default function PairDevicePage() {
   const [status, setStatus] = useState<CaptureStatus>();
+  const [statusCheckedAt, setStatusCheckedAt] = useState(0);
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [smsResult, setSmsResult] = useState("");
   const [busy, setBusy] = useState(false);
   const [accountDestination, setAccountDestination] = useState("/login");
+  const readyConnections = [status?.smsAccess, status?.axisNotificationAccess].filter(Boolean).length;
   const refresh = () =>
     WalletCapture.getStatus()
-      .then(setStatus)
+      .then((value) => { setStatus(value); setStatusCheckedAt(Date.now()); })
       .catch(() => setStatus(undefined));
   useEffect(() => {
     if (!isNative()) return;
@@ -179,27 +181,11 @@ export default function PairDevicePage() {
           <div style={{ marginTop: 35 }}>
             <span className="eyebrow">Capture status</span>
             <h2>This phone is paired</h2>
-            <div className="notice">
-              <strong>Device ID</strong>
-              <br />
-              {status.deviceId}
-            </div>
-            <div className="card" style={{ marginTop: 14 }}>
-              <StatusRow label="SMS access (Vodafone, InstaPay, Orange, e& Cash)" ok={status.smsAccess} />
-              <StatusRow
-                label="Last SMS checked"
-                ok={Boolean(status.lastSmsAt)}
-                value={time(status.lastSmsAt)}
-              />
-              <StatusRow label="Axis notification access" ok={status.axisNotificationAccess} />
-              <StatusRow label="Last Axis notification checked" ok={Boolean(status.lastAxisNotificationAt)} value={time(status.lastAxisNotificationAt)} />
-              <StatusRow
-                label="Last wallet match"
-                ok={Boolean(status.lastWalletMatchAt)}
-                value={time(status.lastWalletMatchAt)}
-              />
-              <StatusRow label="Battery optimization" ok={status.batteryOptimizationIgnored} value={status.batteryOptimizationIgnored ? "Unrestricted" : "Needs attention"}/>
-            </div>
+            <section className={`capture-summary ${readyConnections === 2 ? "ready" : "attention"}`}>
+              <div className="capture-summary-head"><div><span>Wallet connections</span><strong>{readyConnections} of 2 ready</strong></div><span className={`badge ${readyConnections === 2 ? "success" : "danger"}`}>{readyConnections === 2 ? "Connected" : "Setup needed"}</span></div>
+              <div className="connection-methods"><ConnectionMethod label="SMS wallets" ready={Boolean(status.smsAccess)}/><ConnectionMethod label="App-notification wallets" ready={Boolean(status.axisNotificationAccess)}/></div>
+              <p>{status.lastWalletMatchAt ? `Last payment captured ${relative(status.lastWalletMatchAt, statusCheckedAt)}` : "Connected and waiting for the first payment."}</p>
+            </section>
             {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
             {smsResult && <div className="notice" style={{ marginTop: 12 }}>{smsResult}</div>}
             {!status.smsAccess && (
@@ -212,29 +198,20 @@ export default function PairDevicePage() {
                 </button>
               </div>
             )}
-            {status.smsAccess && (
-              <button className="btn btn-secondary btn-wide" style={{ marginTop: 12 }} disabled={busy} onClick={scanSms}>
-                Scan SMS from the last 30 days
-              </button>
-            )}
             {!status.axisNotificationAccess && (
               <div className="notice" style={{ marginTop: 14 }}>
-                <strong>Enable Axis capture:</strong> open notification access and allow Wallets Hub. Only notifications posted by the official Axis app are inspected.
-                <button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openNotificationAccessSettings()}>Open notification access</button>
+                <strong>Connect app-notification wallets:</strong> allow Wallets Hub in notification access.
+                <button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openNotificationAccessSettings()}>Allow notification capture</button>
               </div>
             )}
-            {!status.batteryOptimizationIgnored && <div className="notice" style={{ marginTop: 14 }}><strong>Keep capture reliable:</strong> set Wallets Hub battery use to Unrestricted so Android does not stop background SMS uploads.<button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openBatterySettings()}>Open battery settings</button></div>}
-            <button
-              className="btn btn-secondary btn-wide"
-              style={{ marginTop: 12 }}
-              onClick={refresh}
-            >
-              <RefreshCw size={17} />
-              Refresh status
-            </button>
-            <p className="muted" style={{ textAlign: "center" }}>
-              <ShieldCheck size={15} /> Only matching incoming wallet SMS messages and official Axis app notifications are uploaded.
-            </p>
+            <details className="technical-details phone-technical-details">
+              <summary>Technical details</summary>
+              <div className="diagnostic-list"><StatusRow label="Device ID" ok value={status.deviceId}/><StatusRow label="Last SMS checked" ok={Boolean(status.lastSmsAt)} value={time(status.lastSmsAt)}/><StatusRow label="Last notification checked" ok={Boolean(status.lastAxisNotificationAt)} value={time(status.lastAxisNotificationAt)}/><StatusRow label="Last payment match" ok={Boolean(status.lastWalletMatchAt)} value={time(status.lastWalletMatchAt)}/><StatusRow label="Battery protection" ok={status.batteryOptimizationIgnored} value={status.batteryOptimizationIgnored ? "Unrestricted" : "Needs attention"}/></div>
+              {status.smsAccess && <button className="btn btn-secondary btn-wide" disabled={busy} onClick={scanSms}>Scan SMS from the last 30 days</button>}
+              {!status.batteryOptimizationIgnored && <button className="btn btn-secondary btn-wide" onClick={() => WalletCapture.openBatterySettings()}>Open battery settings</button>}
+              <button className="btn btn-secondary btn-wide" onClick={refresh}><RefreshCw size={17}/>Refresh status</button>
+              <p className="muted technical-note"><ShieldCheck size={14}/>Only matching incoming payment messages are uploaded.</p>
+            </details>
           </div>
         )}
       </div>
@@ -263,6 +240,16 @@ function StatusRow({
     </div>
   );
 }
+function ConnectionMethod({ label, ready }: { label: string; ready: boolean }) {
+  return <div><span className={`connection-dot ${ready ? "ready" : ""}`}/><strong>{label}</strong><small>{ready ? "Connected" : "Needs setup"}</small></div>;
+}
 function time(value?: number) {
   return value ? new Date(value).toLocaleString() : "Not yet";
+}
+function relative(value: number, now: number) {
+  const seconds = Math.max(0, Math.floor((now - value) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60); if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
