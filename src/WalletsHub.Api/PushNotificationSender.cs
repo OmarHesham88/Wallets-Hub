@@ -47,7 +47,7 @@ public sealed class FirebasePushNotificationSender : IPushNotificationSender, ID
             }.FromPrivateKey(serviceAccount.PrivateKey));
             firebaseApp = FirebaseApp.Create(new AppOptions
             {
-                Credential = GoogleCredential.FromCredential(credential),
+                Credential = GoogleCredential.FromServiceAccountCredential(credential),
                 ProjectId = serviceAccount.ProjectId
             }, "wallets-hub-push");
             messaging = FirebaseMessaging.GetMessaging(firebaseApp);
@@ -69,7 +69,8 @@ public sealed class FirebasePushNotificationSender : IPushNotificationSender, ID
         {
             try
             {
-                var response = await messaging.SendEachForMulticastAsync(new MulticastMessage
+#pragma warning disable CS0618 // Capacitor 8 currently supplies an FCM registration token, not a Firebase Installation ID.
+                var message = new MulticastMessage
                 {
                     Tokens = batch,
                     Notification = new Notification { Title = title, Body = body },
@@ -79,7 +80,9 @@ public sealed class FirebasePushNotificationSender : IPushNotificationSender, ID
                         Priority = Priority.High,
                         Notification = new AndroidNotification { ChannelId = "payments", Sound = "default", Color = "#147A52" }
                     }
-                }, cancellationToken);
+                };
+#pragma warning restore CS0618
+                var response = await messaging.SendEachForMulticastAsync(message, cancellationToken);
                 delivered += response.SuccessCount;
                 for (var index = 0; index < response.Responses.Count; index++)
                 {
