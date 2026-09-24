@@ -19,10 +19,11 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, appPath, User } from "@/lib/api";
 import { useIsNative } from "@/lib/wallet-native";
 import { LanguageToggle, useI18n } from "@/components/i18n";
+import { disableAppPushNotifications, enableAppPushNotifications } from "@/lib/push-notifications";
 
 const organizationLinks = [
   ["/dashboard", "Overview", LayoutDashboard],
@@ -52,6 +53,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
     enabled: Boolean(me.data && me.data.role !== "PlatformAdmin"),
     refetchInterval: 20_000,
   });
+  useEffect(() => {
+    if (native && me.data && me.data.role !== "PlatformAdmin") void enableAppPushNotifications(false);
+  }, [native, me.data]);
   const accountLinks =
     me.data?.role === "PlatformAdmin"
       ? [
@@ -129,6 +133,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             className="icon-button"
             title={t("Log out")}
             onClick={async () => {
+              if (native && me.data?.role !== "PlatformAdmin") await disableAppPushNotifications();
               await api("/api/auth/logout", { method: "POST" });
               client.clear();
               router.replace(native ? "/pair-device" : "/login");

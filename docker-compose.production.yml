@@ -25,6 +25,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Seed__PlatformEmail: ${WALLETSHUB_PLATFORM_EMAIL}
       Seed__PlatformPassword: ${WALLETSHUB_PLATFORM_PASSWORD}
+      Firebase__ServiceAccountPath: /run/secrets/firebase-service-account.json
     depends_on:
       walletshub-db:
         condition: service_healthy
@@ -51,6 +52,7 @@ services:
     environment: *walletshub-api-env
     volumes:
       - walletshub-keys:/home/app/.aspnet/DataProtection-Keys
+      - ./.firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
     expose: ["8080"]
     depends_on:
       walletshub-seed:

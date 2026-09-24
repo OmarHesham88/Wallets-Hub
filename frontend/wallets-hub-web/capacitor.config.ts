@@ -8,5 +8,6 @@ const config: CapacitorConfig = {
   loggingBehavior: "none",
   server: { url: "https://servicehub.ink/wallets/pair-device", hostname: "servicehub.ink", androidScheme: "https" },
   android: { allowMixedContent: false, webContentsDebuggingEnabled: false },
+  plugins: { PushNotifications: { presentationOptions: ["badge", "sound", "alert"] } },
 };
 export default config;

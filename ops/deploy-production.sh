@@ -28,8 +28,15 @@ if test -f "$app_dir/$compose_file"; then
 fi
 
 echo "Installing release files and images"
-find "$app_dir" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password -exec rm -rf -- {} +
+find "$app_dir" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password ! -name .firebase-service-account.json -exec rm -rf -- {} +
 tar -xzf /tmp/walletshub-source.tar.gz -C "$app_dir"
+if test -s /tmp/walletshub-firebase-service-account.json; then
+  docker run --rm --volume "$app_dir:/config" alpine:3.22 rm -f /config/.firebase-service-account.json
+  install -m 600 /tmp/walletshub-firebase-service-account.json "$app_dir/.firebase-service-account.json"
+  rm -f /tmp/walletshub-firebase-service-account.json
+fi
+test -f "$app_dir/.firebase-service-account.json" || printf '{}\n' > "$app_dir/.firebase-service-account.json"
+docker run --rm --volume "$app_dir:/config" alpine:3.22 sh -c 'chown 1654:1654 /config/.firebase-service-account.json && chmod 600 /config/.firebase-service-account.json'
 gzip -dc /tmp/walletshub-images.tar.gz | docker load
 
 cd "$app_dir"

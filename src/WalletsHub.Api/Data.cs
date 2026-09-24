@@ -15,6 +15,7 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
     public DbSet<WalletReconciliation> WalletReconciliations => Set<WalletReconciliation>();
     public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
+    public DbSet<PushDevice> PushDevices => Set<PushDevice>();
     public DbSet<NotificationDispatch> NotificationDispatches => Set<NotificationDispatch>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
 
@@ -128,6 +129,18 @@ public sealed class WalletsDbContext(DbContextOptions<WalletsDbContext> options)
             e.HasIndex(x => new { x.UserId, x.CreatedAtUtc });
             e.Property(x => x.Title).HasMaxLength(180);
             e.HasOne<AppUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<PushDevice>(e =>
+        {
+            e.Property(x => x.InstallationId).HasMaxLength(120);
+            e.Property(x => x.TokenHash).HasMaxLength(64);
+            e.Property(x => x.Platform).HasMaxLength(20);
+            e.Property(x => x.LastError).HasMaxLength(300);
+            e.HasIndex(x => x.InstallationId).IsUnique();
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.OrganizationId, x.UserId, x.IsActive });
+            e.HasOne<AppUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
         });
         b.Entity<NotificationDispatch>(e =>
         {

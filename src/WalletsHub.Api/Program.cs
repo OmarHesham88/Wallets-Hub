@@ -51,6 +51,7 @@ builder.Services.AddRateLimiter(options =>
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(10), QueueLimit = 0 }));
 });
 builder.Services.AddHostedService<OperationsNotificationWorker>();
+builder.Services.AddSingleton<IPushNotificationSender, FirebasePushNotificationSender>();
 builder.Services.AddHealthChecks();
 builder.Services.AddProblemDetails();
 
@@ -168,6 +169,22 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
             "CreatedAtUtc" timestamp with time zone NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_NotificationDispatches_DispatchKey" ON "NotificationDispatches" ("DispatchKey");
+        CREATE TABLE IF NOT EXISTS "PushDevices" (
+            "Id" uuid NOT NULL PRIMARY KEY,
+            "OrganizationId" uuid NOT NULL REFERENCES "Organizations" ("Id") ON DELETE RESTRICT,
+            "UserId" text NOT NULL REFERENCES "AspNetUsers" ("Id") ON DELETE CASCADE,
+            "InstallationId" character varying(120) NOT NULL,
+            "TokenHash" character varying(64) NOT NULL,
+            "ProtectedToken" text NOT NULL,
+            "Platform" character varying(20) NOT NULL DEFAULT 'android',
+            "IsActive" boolean NOT NULL DEFAULT true,
+            "LastError" character varying(300) NULL,
+            "LastSeenAtUtc" timestamp with time zone NOT NULL,
+            "CreatedAtUtc" timestamp with time zone NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_PushDevices_InstallationId" ON "PushDevices" ("InstallationId");
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_PushDevices_TokenHash" ON "PushDevices" ("TokenHash");
+        CREATE INDEX IF NOT EXISTS "IX_PushDevices_OrganizationId_UserId_IsActive" ON "PushDevices" ("OrganizationId", "UserId", "IsActive");
 
         -- Wallets Hub is EGP-only. Remove legacy Binance, USD, and USDT data in
         -- dependency order while keeping unrelated EGP history intact.
@@ -657,7 +674,7 @@ static void MapDevices(WebApplication app)
 
 static void MapReceipts(WebApplication app)
 {
-    app.MapPost("/api/captures", async (CaptureRequest request, HttpContext http, WalletsDbContext db, IDataProtectionProvider protection) =>
+    app.MapPost("/api/captures", async (CaptureRequest request, HttpContext http, WalletsDbContext db, IDataProtectionProvider protection, IPushNotificationSender pushSender) =>
     {
         var device = await DeviceFromToken(http, db);
         if (device is null) return Results.Unauthorized();
@@ -765,16 +782,21 @@ static void MapReceipts(WebApplication app)
             select new { candidate.Id, Role = role.Name! }).ToListAsync();
         var recipientIds = recipientRoles.Select(x => x.Id).ToList();
         var preferences = await db.NotificationPreferences.Where(x => recipientIds.Contains(x.UserId) && (x.WalletId == null || x.WalletId == wallet.Id)).ToListAsync();
+        var pushRecipientIds = new List<string>();
         foreach (var recipient in recipientRoles.DistinctBy(x => x.Id))
         {
             var preference = preferences.FirstOrDefault(x => x.UserId == recipient.Id && x.WalletId == wallet.Id) ?? preferences.FirstOrDefault(x => x.UserId == recipient.Id && x.WalletId == null);
             var enabled = preference?.EveryReceipt ?? recipient.Role is Roles.Owner or Roles.Admin;
             var meetsThreshold = preference?.MinimumAmount is null || parsed.Amount >= preference.MinimumAmount.Value;
             if (enabled && meetsThreshold)
+            {
                 db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = recipient.Id, Title = requireConfirmation ? $"{parsed.Amount:N2} EGP awaiting confirmation" : $"{parsed.Amount:N2} EGP received", Body = $"{parsed.Provider} payment detected for {wallet.Name}.", Link = "/receipts", SourceId = receipt.Id });
+                pushRecipientIds.Add(recipient.Id);
+            }
         }
         db.AuditEvents.Add(Audit(device.OrganizationId, null, "ReceiptDetected", nameof(WalletReceipt), receipt.Id.ToString(), new { wallet.Id, parsed.Provider, parsed.Amount, parsed.CurrencyCode, CaptureEventId = capture.Id }));
         await db.SaveChangesAsync();
+        await SendPaymentPushNotifications(pushSender, db, protection, pushRecipientIds, receipt, wallet);
         return Results.Created($"/api/receipts/{receipt.Id}", new { receipt.Id, receipt.Amount, receipt.CurrencyCode, receipt.Provider, captureEventId = capture.Id });
     });
 
@@ -929,6 +951,42 @@ static void MapNotifications(WebApplication app)
     {
         var user = await RequireOrganizationUser(principal, users);
         await db.UserNotifications.Where(x => x.OrganizationId == user.OrganizationId && x.UserId == user.Id && x.ReadAtUtc == null).ExecuteUpdateAsync(update => update.SetProperty(x => x.ReadAtUtc, DateTime.UtcNow));
+        return Results.NoContent();
+    });
+
+    var pushDevices = app.MapGroup("/api/push-devices").RequireAuthorization();
+    pushDevices.MapGet("/status", async (string? installationId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IPushNotificationSender pushSender) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var registered = !string.IsNullOrWhiteSpace(installationId) && await db.PushDevices.AnyAsync(x => x.UserId == user.Id && x.InstallationId == installationId && x.IsActive);
+        return Results.Ok(new { Supported = pushSender.IsConfigured, Registered = registered });
+    });
+    pushDevices.MapPost("/", async (PushRegistrationRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db, IDataProtectionProvider protection) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        var token = request.Token.Trim(); var installationId = request.InstallationId.Trim();
+        if (token.Length is < 20 or > 4096 || installationId.Length is < 8 or > 120) return Results.BadRequest(new { error = "The push registration is invalid." });
+        var tokenHash = Hash(token);
+        var matches = await db.PushDevices.Where(x => x.InstallationId == installationId || x.TokenHash == tokenHash).ToListAsync();
+        var registration = matches.FirstOrDefault();
+        if (registration is null)
+        {
+            registration = new PushDevice { OrganizationId = user.OrganizationId!.Value, UserId = user.Id, InstallationId = installationId, TokenHash = tokenHash, ProtectedToken = string.Empty };
+            db.PushDevices.Add(registration);
+        }
+        foreach (var duplicate in matches.Skip(1)) db.PushDevices.Remove(duplicate);
+        registration.OrganizationId = user.OrganizationId!.Value; registration.UserId = user.Id;
+        registration.InstallationId = installationId; registration.TokenHash = tokenHash;
+        registration.ProtectedToken = protection.CreateProtector("WalletsHub.PushToken.v1").Protect(token);
+        registration.Platform = request.Platform.Equals("android", StringComparison.OrdinalIgnoreCase) ? "android" : "unknown";
+        registration.IsActive = true; registration.LastError = null; registration.LastSeenAtUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return Results.NoContent();
+    });
+    pushDevices.MapDelete("/{installationId}", async (string installationId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var user = await RequireOrganizationUser(principal, users);
+        await db.PushDevices.Where(x => x.UserId == user.Id && x.InstallationId == installationId).ExecuteDeleteAsync();
         return Results.NoContent();
     });
 
@@ -1251,6 +1309,27 @@ static async Task QueueCaptureIssueNotifications(WalletsDbContext db, WalletDevi
     foreach (var userId in recipients)
         db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = userId, Title = "Capture needs attention", Body = $"{device.Name}: {capture.Reason.Replace('-', ' ')}.", Link = "/capture-health", SourceId = capture.Id });
 }
+static async Task SendPaymentPushNotifications(IPushNotificationSender pushSender, WalletsDbContext db, IDataProtectionProvider protection, IReadOnlyCollection<string> recipientIds, WalletReceipt receipt, Wallet wallet)
+{
+    if (!pushSender.IsConfigured || recipientIds.Count == 0) return;
+    var devices = await db.PushDevices.Where(x => x.OrganizationId == receipt.OrganizationId && x.IsActive && recipientIds.Contains(x.UserId)).ToListAsync();
+    if (devices.Count == 0) return;
+    var protector = protection.CreateProtector("WalletsHub.PushToken.v1");
+    var tokenDevices = new List<(string Token, PushDevice Device)>();
+    foreach (var device in devices)
+    {
+        try { tokenDevices.Add((protector.Unprotect(device.ProtectedToken), device)); }
+        catch { device.IsActive = false; device.LastError = "Stored push token could not be read."; }
+    }
+    var sender = string.IsNullOrWhiteSpace(receipt.Sender) ? string.Empty : $" · From {receipt.Sender}";
+    var result = await pushSender.SendPaymentAsync(tokenDevices.Select(x => x.Token).ToArray(), $"{receipt.Amount:N2} EGP received", $"{wallet.Name} · {receipt.Provider}{sender}", receipt.Id);
+    if (result.InvalidTokens.Count > 0)
+    {
+        var invalid = result.InvalidTokens.ToHashSet(StringComparer.Ordinal);
+        foreach (var entry in tokenDevices.Where(x => invalid.Contains(x.Token))) { entry.Device.IsActive = false; entry.Device.LastError = "Firebase registration expired."; }
+    }
+    if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync();
+}
 static IQueryable<WalletReceipt> ApplyReportFilters(IQueryable<WalletReceipt> query, ReportRequest request)
 {
     var walletIds = ParseGuids(request.WalletIds); if (request.WalletId.HasValue) walletIds.Add(request.WalletId.Value);
@@ -1316,6 +1395,7 @@ public sealed record DeviceHeartbeatRequest(string? AppVersion, string? AndroidV
 public sealed record CaptureRequest(Guid? WalletId, string? SourcePackage, string? Title, string? Body, DateTime ReceivedAtUtc, string Fingerprint);
 public sealed record NotificationPreferenceRequest(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
 public sealed record NotificationPreferenceResponse(bool EveryReceipt, decimal? MinimumAmount, bool DailySummary, bool DeviceOffline);
+public sealed record PushRegistrationRequest(string Token, string InstallationId, string Platform);
 public sealed record WorkspaceSettingsRequest(string TimeZoneId, bool MaskSensitiveMessages, bool RequireReceiptConfirmation);
 public sealed record ResolveCaptureRequest(Guid WalletId);
 public sealed record LedgerEntryRequest(Guid WalletId, string Type, decimal Amount, string? Note, DateTime? OccurredAtUtc);

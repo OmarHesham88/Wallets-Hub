@@ -32,6 +32,15 @@ jobs:
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
         working-directory: frontend/wallets-hub-web
+      - name: Restore Firebase Android configuration
+        env:
+          FIREBASE_ANDROID_CONFIG_BASE64: ${{ secrets.FIREBASE_ANDROID_CONFIG_BASE64 }}
+        run: |
+          if test -n "$FIREBASE_ANDROID_CONFIG_BASE64"; then
+            printf '%s' "$FIREBASE_ANDROID_CONFIG_BASE64" | base64 --decode > frontend/wallets-hub-web/android/app/google-services.json
+          else
+            echo "Firebase Android configuration is not present; push registration will remain unavailable."
+          fi
       - run: npm run mobile:sync
         working-directory: frontend/wallets-hub-web
       - name: Restore Android signing key

@@ -63,6 +63,13 @@ jobs:
       - uses: android-actions/setup-android@v4
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
+      - name: Restore Firebase Android configuration when available
+        env:
+          FIREBASE_ANDROID_CONFIG_BASE64: ${{ secrets.FIREBASE_ANDROID_CONFIG_BASE64 }}
+        run: |
+          if test -n "$FIREBASE_ANDROID_CONFIG_BASE64"; then
+            printf '%s' "$FIREBASE_ANDROID_CONFIG_BASE64" | base64 --decode > android/app/google-services.json
+          fi
       - run: npm run mobile:sync
       - run: chmod +x ./gradlew && ./gradlew testDebugUnitTest assembleDebug --no-daemon
         working-directory: frontend/wallets-hub-web/android

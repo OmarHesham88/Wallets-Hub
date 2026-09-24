@@ -197,6 +197,21 @@ public sealed class UserNotification
     public DateTime? ReadAtUtc { get; set; }
 }
 
+public sealed class PushDevice
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid OrganizationId { get; set; }
+    public required string UserId { get; set; }
+    public required string InstallationId { get; set; }
+    public required string TokenHash { get; set; }
+    public required string ProtectedToken { get; set; }
+    public string Platform { get; set; } = "android";
+    public bool IsActive { get; set; } = true;
+    public string? LastError { get; set; }
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
 public sealed class AuditEvent
 {
     public Guid Id { get; set; } = Guid.NewGuid();
