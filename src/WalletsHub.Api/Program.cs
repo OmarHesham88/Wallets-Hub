@@ -492,6 +492,13 @@ static void MapWallets(WebApplication app)
         var query = db.Wallets.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
         if (includeInactive != true || !IsOrganizationAdmin(principal)) query = query.Where(x => x.IsActive);
         if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) query = query.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
+        if (!CanViewBalances(principal))
+        {
+            return Results.Ok(await query.OrderBy(x => x.Name).Select(x => new
+            {
+                x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode, x.DeviceId, x.IsActive, x.CreatedAtUtc
+            }).ToListAsync());
+        }
         return Results.Ok(await query.OrderBy(x => x.Name).Select(x => new
         {
             x.Id, x.Name, x.Provider, x.AccountNumber, x.CurrencyCode, x.DeviceId, x.IsActive, x.OpeningBalance, x.BalanceLimit, x.CreatedAtUtc,
@@ -1012,6 +1019,7 @@ static void MapOperations(WebApplication app)
     operations.MapGet("/", async (Guid? walletId, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
+        if (!CanViewBalances(principal)) return Results.Forbid();
         var wallets = db.Wallets.AsNoTracking().Where(x => x.OrganizationId == user.OrganizationId);
         if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) wallets = wallets.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
         if (walletId.HasValue) wallets = wallets.Where(x => x.Id == walletId);
@@ -1030,6 +1038,7 @@ static void MapOperations(WebApplication app)
     operations.MapGet("/statement", async ([AsParameters] StatementRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var user = await RequireOrganizationUser(principal, users);
+        if (!CanViewBalances(principal)) return Results.Forbid();
         var walletQuery = db.Wallets.AsNoTracking().Where(x => x.Id == request.WalletId && x.OrganizationId == user.OrganizationId);
         if (!IsOrganizationAdmin(principal) && !user.AllWalletAccess) walletQuery = walletQuery.Where(x => db.UserWalletAccess.Any(a => a.UserId == user.Id && a.WalletId == x.Id));
         var wallet = await walletQuery.SingleOrDefaultAsync(); if (wallet is null) return Results.NotFound();
@@ -1209,6 +1218,7 @@ static IQueryable<WalletReceipt> ConfirmedReceipts(ClaimsPrincipal principal, Ap
     ScopedReceipts(principal, user, db).Where(x => x.Status == ReceiptStatus.Confirmed && x.CurrencyCode == "EGP");
 
 static bool IsOrganizationAdmin(ClaimsPrincipal principal) => principal.IsInRole(Roles.Owner) || principal.IsInRole(Roles.Admin);
+static bool CanViewBalances(ClaimsPrincipal principal) => IsOrganizationAdmin(principal) || principal.IsInRole(Roles.Manager);
 static bool CanManageTeam(ClaimsPrincipal principal, AppUser user) => IsOrganizationAdmin(principal) || user.CanManageTeam;
 static void ApplyRoleDefaults(AppUser user, string role)
 {

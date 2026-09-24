@@ -7,7 +7,7 @@ import { Edit3, Gauge, Plus, Trash2, WalletCards, X } from "lucide-react";
 import { Shell } from "@/components/shell";
 import { api, money, User } from "@/lib/api";
 
-type Wallet = { id: string; name: string; provider: string; accountNumber: string; currencyCode: string; deviceId?: string; isActive: boolean; openingBalance: number; balanceLimit?: number; currentBalance: number };
+type Wallet = { id: string; name: string; provider: string; accountNumber: string; currencyCode: string; deviceId?: string; isActive: boolean; openingBalance?: number; balanceLimit?: number; currentBalance?: number };
 type Device = { id: string; name: string; isActive: boolean };
 const providers = ["Vodafone Cash", "InstaPay", "Axis", "Orange Cash", "e& Cash"];
 
@@ -15,6 +15,7 @@ export default function WalletsPage() {
   const client = useQueryClient(); const [editing, setEditing] = useState<Wallet | null | undefined>(undefined); const [provider, setProvider] = useState("Vodafone Cash");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/api/auth/me") });
   const canManage = ["Owner", "Admin"].includes(me.data?.role ?? "");
+  const canViewBalances = ["Owner", "Admin", "Manager"].includes(me.data?.role ?? "");
   const wallets = useQuery({ queryKey: ["wallets", canManage], queryFn: () => api<Wallet[]>(`/api/wallets${canManage ? "?includeInactive=true" : ""}`) });
   const devices = useQuery({ queryKey: ["devices"], queryFn: () => api<Device[]>("/api/devices"), retry: false, enabled: canManage || Boolean(me.data?.canManageDevices) });
   const save = useMutation({ mutationFn: ({ id, body }: { id?: string; body: object }) => api(id ? `/api/wallets/${id}` : "/api/wallets", { method: id ? "PUT" : "POST", body: JSON.stringify(body) }), onSuccess: () => { setEditing(undefined); client.invalidateQueries({ queryKey: ["wallets"] }); client.invalidateQueries({ queryKey: ["wallet-operations"] }); } });
@@ -29,8 +30,8 @@ export default function WalletsPage() {
     <div className="grid">{(wallets.data ?? []).map((wallet) => <article className="card" key={wallet.id}>
       <div className="card-top"><div className="card-icon"><WalletCards/></div><span className={`badge ${wallet.isActive ? "success" : "danger"}`}>{wallet.isActive ? "Active" : "Paused"}</span></div>
       <h2>{wallet.name}</h2><p><strong>{wallet.provider}</strong></p><p>{wallet.accountNumber} · {wallet.currencyCode}</p><p>{wallet.deviceId ? devices.data?.find((device) => device.id === wallet.deviceId)?.name ?? "Assigned device" : "No device assigned"}</p>
-      <div className="balance-line"><span>Current balance</span><strong>{money(wallet.currentBalance, wallet.currencyCode)}</strong></div>
-      {wallet.balanceLimit ? <div className="progress"><span style={{ width: `${Math.min(100, Math.max(0, wallet.currentBalance / wallet.balanceLimit * 100))}%` }}/></div> : null}
+      {canViewBalances && wallet.currentBalance !== undefined && <><div className="balance-line"><span>Current balance</span><strong>{money(wallet.currentBalance, wallet.currencyCode)}</strong></div>
+      {wallet.balanceLimit ? <div className="progress"><span style={{ width: `${Math.min(100, Math.max(0, wallet.currentBalance / wallet.balanceLimit * 100))}%` }}/></div> : null}</>}
       {canManage && <div className="button-row" style={{ marginTop: 14 }}><button className="btn btn-secondary btn-small" onClick={() => open(wallet)}><Edit3 size={15}/>Edit</button><button className="btn btn-danger btn-small" disabled={remove.isPending} onClick={() => deleteWallet(wallet)}><Trash2 size={15}/>Archive</button></div>}
     </article>)}</div>
     {!wallets.isLoading && (wallets.data ?? []).length === 0 && <div className="empty"><div><WalletCards/><h2>No wallets yet</h2><p className="muted">Create your first receiving wallet to begin.</p></div></div>}

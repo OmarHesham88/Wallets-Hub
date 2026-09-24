@@ -78,6 +78,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
               me.data?.role === "Admin" ||
               me.data?.canViewReports
             );
+          if (href === "/wallet-operations")
+            return (
+              me.data?.role === "Owner" ||
+              me.data?.role === "Admin" ||
+              me.data?.role === "Manager"
+            );
           return true;
         });
   const links = native
