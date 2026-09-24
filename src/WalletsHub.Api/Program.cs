@@ -116,6 +116,10 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "RequireReceiptConfirmation" boolean NOT NULL DEFAULT false;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "AllWalletAccess" boolean NOT NULL DEFAULT false;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "CanConfirmReceipts" boolean NOT NULL DEFAULT false;
+        -- Rejection was removed from Wallets Hub. Older production databases can
+        -- still contain this required column, which blocks creation of new users
+        -- because the current identity model no longer writes a value for it.
+        ALTER TABLE "AspNetUsers" DROP COLUMN IF EXISTS "CanRejectReceipts";
         UPDATE "AspNetUsers" u SET "AllWalletAccess" = true
           WHERE u."OrganizationId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "UserWalletAccess" a WHERE a."UserId" = u."Id");
         ALTER TABLE "Wallets" ADD COLUMN IF NOT EXISTS "OpeningBalance" numeric(18,4) NOT NULL DEFAULT 0;
