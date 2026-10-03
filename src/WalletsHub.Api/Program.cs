@@ -837,9 +837,10 @@ static void MapReceipts(WebApplication app)
         var rows = await query.Skip((page - 1) * pageSize).Take(pageSize)
             .Join(db.Wallets, r => r.WalletId, w => w.Id, (r, w) => new { Receipt = r, WalletName = w.Name })
             .Join(db.WalletDevices, row => row.Receipt.DeviceId, d => d.Id, (row, d) => new { row.Receipt, row.WalletName, DeviceName = d.Name }).ToListAsync();
+        var canViewSensitiveDetails = CanViewSensitiveReceiptDetails(principal);
         var protector = protection.CreateProtector("WalletsHub.Receipt.v1");
-        var maskMessages = await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.MaskSensitiveMessages).SingleAsync();
-        var items = rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.DeviceName, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Status = x.Receipt.Status.ToString(), x.Receipt.ReviewedByUserId, x.Receipt.ReviewedAtUtc, Message = maskMessages ? MaskSensitive(Unprotect(protector, x.Receipt.ProtectedMessage)) : Unprotect(protector, x.Receipt.ProtectedMessage), x.Receipt.ReceivedAtUtc });
+        var maskMessages = canViewSensitiveDetails && await db.Organizations.Where(x => x.Id == user.OrganizationId).Select(x => x.MaskSensitiveMessages).SingleAsync();
+        var items = rows.Select(x => new { x.Receipt.Id, x.Receipt.WalletId, x.WalletName, x.Receipt.DeviceId, x.DeviceName, x.Receipt.Provider, x.Receipt.Amount, x.Receipt.CurrencyCode, x.Receipt.Sender, x.Receipt.ProviderReference, Status = x.Receipt.Status.ToString(), x.Receipt.ReviewedByUserId, x.Receipt.ReviewedAtUtc, Message = canViewSensitiveDetails ? maskMessages ? MaskSensitive(Unprotect(protector, x.Receipt.ProtectedMessage)) : Unprotect(protector, x.Receipt.ProtectedMessage) : null, x.Receipt.ReceivedAtUtc });
         return Results.Ok(new { Items = items, Total = total, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(total / (double)pageSize) });
     });
 
@@ -1122,7 +1123,13 @@ static void MapReports(WebApplication app)
         var start = request.From?.ToUniversalTime() ?? TimeZoneInfo.ConvertTimeToUtc(localToday.AddDays(-29), zone);
         var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
         if (end <= start || end - start > TimeSpan.FromDays(366)) return Results.BadRequest(new { error = "Choose a date range between one minute and 366 days." });
-        var query = ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request);
+        var periodQuery = ScopedReceipts(principal, user, db).Where(x => x.CurrencyCode == "EGP" && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end);
+        var statusGroups = await ApplyReportFilters(periodQuery, request, includeStatus: false)
+            .GroupBy(x => x.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) })
+            .ToListAsync();
+        var statusRows = statusGroups.Select(x => new { Status = x.Status.ToString(), x.Count, x.Amount }).ToList();
+        var query = ApplyReportFilters(periodQuery, request);
         var rows = await query.Select(x => new { x.WalletId, x.DeviceId, x.Provider, x.CurrencyCode, x.Amount, x.Sender, x.ReceivedAtUtc }).ToListAsync();
         var totals = rows.GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount), Average = g.Average(x => x.Amount), Median = Median(g.Select(x => x.Amount)), Maximum = g.Max(x => x.Amount) }).ToList();
         var wallets = rows.GroupBy(x => new { x.WalletId, x.CurrencyCode }).Select(g => new { g.Key.WalletId, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToList();
@@ -1134,14 +1141,14 @@ static void MapReports(WebApplication app)
         var devices = rows.GroupBy(x => new { x.DeviceId, x.CurrencyCode }).Select(g => new { g.Key.DeviceId, DeviceName = deviceNames.GetValueOrDefault(g.Key.DeviceId, "Device"), g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).OrderByDescending(x => x.Amount).ToList();
         var hours = localRows.GroupBy(x => new { Hour = x.Local.Hour, x.Row.CurrencyCode }).Select(g => new { g.Key.Hour, g.Key.CurrencyCode, Count = g.Count(), Amount = g.Sum(x => x.Row.Amount) }).OrderBy(x => x.Hour).ToList();
         var duration = end - start; var previousStart = start - duration;
-        var previous = await ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= previousStart && x.ReceivedAtUtc < start), request)
+        var previous = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.CurrencyCode == "EGP" && x.ReceivedAtUtc >= previousStart && x.ReceivedAtUtc < start), request)
             .GroupBy(x => x.CurrencyCode).Select(g => new { CurrencyCode = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) }).ToListAsync();
         var senders = rows.Where(x => !string.IsNullOrWhiteSpace(x.Sender)).Select(x => x.Sender!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var knownBefore = await ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc < start && x.Sender != null && senders.Contains(x.Sender)).Select(x => x.Sender!).Distinct().ToListAsync();
         var newSenders = senders.Count(sender => !knownBefore.Contains(sender, StringComparer.OrdinalIgnoreCase));
         var captureQuality = await db.CaptureEvents.Where(x => x.OrganizationId == user.OrganizationId && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end).GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync();
         var quality = new { MissingSender = rows.Count(x => string.IsNullOrWhiteSpace(x.Sender)), UnmatchedCaptures = captureQuality.Where(x => x.Status == "Unmatched").Sum(x => x.Count), DuplicateCaptures = captureQuality.Where(x => x.Status == "Duplicate").Sum(x => x.Count), RejectedCaptures = captureQuality.Where(x => x.Status == "Rejected").Sum(x => x.Count), FailedUploads = await db.WalletDevices.Where(x => x.OrganizationId == user.OrganizationId).SumAsync(x => x.FailedUploadCount), NewSenders = newSenders, ReturningSenders = senders.Count - newSenders };
-        return Results.Ok(new { From = start, To = end, TimeZone = organization.TimeZoneId, Totals = totals, PreviousTotals = previous, Wallets = wallets.Select(x => new { x.WalletId, WalletName = names.GetValueOrDefault(x.WalletId, "Wallet"), x.CurrencyCode, x.Count, x.Amount }), Daily = daily, Providers = providers, Devices = devices, Hours = hours, Quality = quality });
+        return Results.Ok(new { From = start, To = end, TimeZone = organization.TimeZoneId, Totals = totals, PreviousTotals = previous, Statuses = statusRows, Wallets = wallets.Select(x => new { x.WalletId, WalletName = names.GetValueOrDefault(x.WalletId, "Wallet"), x.CurrencyCode, x.Count, x.Amount }), Daily = daily, Providers = providers, Devices = devices, Hours = hours, Quality = quality });
     }).RequireAuthorization();
     app.MapGet("/api/reports/export.xlsx", async ([AsParameters] ReportRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -1149,12 +1156,12 @@ static void MapReports(WebApplication app)
         if (!user.CanExportReports && !IsOrganizationAdmin(principal)) return Results.Forbid();
         var start = request.From?.ToUniversalTime() ?? DateTime.UtcNow.AddDays(-30);
         var end = request.To?.ToUniversalTime() ?? DateTime.UtcNow;
-        var rows = await ApplyReportFilters(ConfirmedReceipts(principal, user, db).Where(x => x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request)
+        var rows = await ApplyReportFilters(ScopedReceipts(principal, user, db).Where(x => x.CurrencyCode == "EGP" && x.ReceivedAtUtc >= start && x.ReceivedAtUtc <= end), request)
             .Join(db.Wallets, receipt => receipt.WalletId, wallet => wallet.Id, (receipt, wallet) => new { Receipt = receipt, WalletName = wallet.Name })
             .OrderByDescending(x => x.Receipt.ReceivedAtUtc).ToListAsync();
         using var workbook = new XLWorkbook();
         var sheet = workbook.Worksheets.Add("Receipts");
-        var headers = new[] { "Received at (UTC)", "Wallet", "Provider", "Sender", "Reference", "Amount", "Currency" };
+        var headers = new[] { "Received at (UTC)", "Wallet", "Provider", "Sender", "Reference", "Amount", "Currency", "Status", "Confirmed at (UTC)" };
         for (var column = 0; column < headers.Length; column++) sheet.Cell(1, column + 1).Value = headers[column];
         for (var index = 0; index < rows.Count; index++)
         {
@@ -1162,7 +1169,8 @@ static void MapReports(WebApplication app)
             sheet.Cell(number, 1).Value = row.Receipt.ReceivedAtUtc; sheet.Cell(number, 2).Value = row.WalletName;
             sheet.Cell(number, 3).Value = row.Receipt.Provider; sheet.Cell(number, 4).Value = row.Receipt.Sender ?? "";
             sheet.Cell(number, 5).Value = row.Receipt.ProviderReference ?? ""; sheet.Cell(number, 6).Value = row.Receipt.Amount;
-            sheet.Cell(number, 7).Value = row.Receipt.CurrencyCode;
+            sheet.Cell(number, 7).Value = row.Receipt.CurrencyCode; sheet.Cell(number, 8).Value = row.Receipt.Status.ToString();
+            if (row.Receipt.ReviewedAtUtc.HasValue) sheet.Cell(number, 9).Value = row.Receipt.ReviewedAtUtc.Value;
         }
         sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#E8F7EF");
         sheet.SheetView.FreezeRows(1); sheet.Columns().AdjustToContents();
@@ -1219,6 +1227,7 @@ static IQueryable<WalletReceipt> ConfirmedReceipts(ClaimsPrincipal principal, Ap
 
 static bool IsOrganizationAdmin(ClaimsPrincipal principal) => principal.IsInRole(Roles.Owner) || principal.IsInRole(Roles.Admin);
 static bool CanViewBalances(ClaimsPrincipal principal) => IsOrganizationAdmin(principal) || principal.IsInRole(Roles.Manager);
+static bool CanViewSensitiveReceiptDetails(ClaimsPrincipal principal) => IsOrganizationAdmin(principal) || principal.IsInRole(Roles.Manager);
 static bool CanManageTeam(ClaimsPrincipal principal, AppUser user) => IsOrganizationAdmin(principal) || user.CanManageTeam;
 static void ApplyRoleDefaults(AppUser user, string role)
 {
@@ -1269,7 +1278,7 @@ static async Task QueueCaptureIssueNotifications(WalletsDbContext db, WalletDevi
     foreach (var userId in recipients)
         db.UserNotifications.Add(new UserNotification { OrganizationId = device.OrganizationId, UserId = userId, Title = "Capture needs attention", Body = $"{device.Name}: {capture.Reason.Replace('-', ' ')}.", Link = "/capture-health", SourceId = capture.Id });
 }
-static IQueryable<WalletReceipt> ApplyReportFilters(IQueryable<WalletReceipt> query, ReportRequest request)
+static IQueryable<WalletReceipt> ApplyReportFilters(IQueryable<WalletReceipt> query, ReportRequest request, bool includeStatus = true)
 {
     var walletIds = ParseGuids(request.WalletIds); if (request.WalletId.HasValue) walletIds.Add(request.WalletId.Value);
     if (walletIds.Count > 0) query = query.Where(x => walletIds.Contains(x.WalletId));
@@ -1278,6 +1287,7 @@ static IQueryable<WalletReceipt> ApplyReportFilters(IQueryable<WalletReceipt> qu
     if (!string.IsNullOrWhiteSpace(request.Currency)) query = query.Where(x => x.CurrencyCode == request.Currency.ToUpper());
     if (request.MinAmount.HasValue) query = query.Where(x => x.Amount >= request.MinAmount);
     if (request.MaxAmount.HasValue) query = query.Where(x => x.Amount <= request.MaxAmount);
+    if (includeStatus && !string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ReceiptStatus>(request.Status, true, out var status)) query = query.Where(x => x.Status == status);
     if (request.MissingSender == true) query = query.Where(x => x.Sender == null || x.Sender == "");
     if (request.MissingReference == true) query = query.Where(x => x.ProviderReference == null || x.ProviderReference == "");
     if (!string.IsNullOrWhiteSpace(request.Search))
@@ -1349,4 +1359,4 @@ public sealed class ReceiptSearchRequest
 }
 public sealed class CaptureEventSearchRequest { public string? Status { get; set; } public string? Reason { get; set; } public Guid? DeviceId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }
 public sealed class AuditSearchRequest { public string? Action { get; set; } public string? UserId { get; set; } public DateTime? From { get; set; } public DateTime? To { get; set; } public int? Page { get; set; } public int? PageSize { get; set; } }
-public sealed class ReportRequest { public DateTime? From { get; set; } public DateTime? To { get; set; } public Guid? WalletId { get; set; } public string? WalletIds { get; set; } public Guid? DeviceId { get; set; } public string? Provider { get; set; } public string? Currency { get; set; } public decimal? MinAmount { get; set; } public decimal? MaxAmount { get; set; } public string? Search { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } }
+public sealed class ReportRequest { public DateTime? From { get; set; } public DateTime? To { get; set; } public Guid? WalletId { get; set; } public string? WalletIds { get; set; } public Guid? DeviceId { get; set; } public string? Provider { get; set; } public string? Currency { get; set; } public string? Status { get; set; } public decimal? MinAmount { get; set; } public decimal? MaxAmount { get; set; } public string? Search { get; set; } public bool? MissingSender { get; set; } public bool? MissingReference { get; set; } }
