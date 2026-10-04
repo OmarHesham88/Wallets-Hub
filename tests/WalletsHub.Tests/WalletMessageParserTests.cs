@@ -6,7 +6,7 @@ namespace WalletsHub.Tests;
 public sealed class WalletMessageParserTests
 {
     [Fact]
-    public void New_receipts_are_confirmed_automatically()
+    public void New_receipts_wait_for_manual_confirmation_by_default()
     {
         var receipt = new WalletReceipt
         {
@@ -17,7 +17,7 @@ public sealed class WalletMessageParserTests
             SourcePackage = "sms"
         };
 
-        Assert.Equal(ReceiptStatus.Confirmed, receipt.Status);
+        Assert.Equal(ReceiptStatus.Pending, receipt.Status);
     }
 
     [Theory]

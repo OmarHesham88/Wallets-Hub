@@ -113,7 +113,8 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
             ON "Wallets" ("OrganizationId", "Provider", "NormalizedAccountNumber");
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "TimeZoneId" character varying(80) NOT NULL DEFAULT 'Africa/Cairo';
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "MaskSensitiveMessages" boolean NOT NULL DEFAULT false;
-        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "RequireReceiptConfirmation" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "RequireReceiptConfirmation" boolean NOT NULL DEFAULT true;
+        ALTER TABLE "Organizations" ALTER COLUMN "RequireReceiptConfirmation" SET DEFAULT true;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "AllWalletAccess" boolean NOT NULL DEFAULT false;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "CanConfirmReceipts" boolean NOT NULL DEFAULT false;
         -- Rejection was removed from Wallets Hub. Older production databases can

@@ -23,7 +23,7 @@ public sealed class Organization
     public bool IsActive { get; set; } = true;
     public string TimeZoneId { get; set; } = "Africa/Cairo";
     public bool MaskSensitiveMessages { get; set; }
-    public bool RequireReceiptConfirmation { get; set; }
+    public bool RequireReceiptConfirmation { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -106,7 +106,7 @@ public sealed class WalletReceipt
     public required string Fingerprint { get; set; }
     public required string ProtectedMessage { get; set; }
     public required string SourcePackage { get; set; }
-    public ReceiptStatus Status { get; set; } = ReceiptStatus.Confirmed;
+    public ReceiptStatus Status { get; set; } = ReceiptStatus.Pending;
     public DateTime ReceivedAtUtc { get; set; }
     public string? ReviewedByUserId { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }
