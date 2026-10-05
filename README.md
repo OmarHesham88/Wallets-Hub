@@ -96,13 +96,13 @@ For full disaster recovery, replicate `$HOME/walletshub-backups` to a separately
 
 ## Android download
 
-Every push to `main` independently runs **Publish Android release** and creates the permanently signed release asset `wallets-hub.apk`. Users of the old preview must uninstall it once; later signed releases can update the installed application normally.
+Every push to `main` independently runs **Publish Android release** and creates the permanently signed release asset `active-cash.apk`. Existing signed Wallets Hub installations can update directly because the Android application ID and signing identity are intentionally retained.
 
-`https://github.com/OmarHesham88/Wallets-Hub/releases/download/android-latest/wallets-hub.apk`
+`https://github.com/OmarHesham88/Wallets-Hub/releases/download/android-latest/active-cash.apk`
 
 Mobile-friendly direct download with resume support:
 
-`https://servicehub.ink/downloads/wallets-hub.apk`
+The legacy direct-download alias remains available at `https://servicehub.ink/downloads/wallets-hub.apk` so existing bookmarks continue to work; the downloaded application is branded Active Cash.
 
 ## Publishing without a connected GitHub plugin
 
