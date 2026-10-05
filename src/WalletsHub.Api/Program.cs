@@ -390,7 +390,7 @@ static void MapPlatform(WebApplication app)
         db.AuditEvents.Add(Audit(id, actor.Id, request.Active ? "SubscriptionActivated" : "SubscriptionDeactivated", nameof(Organization), id.ToString(), new { request.Days, organization.SubscriptionStartsAtUtc, organization.SubscriptionEndsAtUtc }));
         await db.SaveChangesAsync(); return Results.NoContent();
     });
-    platform.MapDelete("/organizations/{id:guid}", async (Guid id, DeleteOrganizationRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    platform.MapDelete("/organizations/{id:guid}", async (Guid id, [FromBody] DeleteOrganizationRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
         var actor = await users.GetUserAsync(principal); if (actor is null) return Results.Unauthorized();
         var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id); if (organization is null) return Results.NotFound();
