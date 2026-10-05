@@ -101,7 +101,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           />
           <div>
             <strong>Active Cash</strong>
-            <span>{me.data?.organizationName ?? t("Platform console")}</span>
           </div>
           <button
             className="icon-button mobile-close"
