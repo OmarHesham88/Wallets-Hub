@@ -1,4 +1,4 @@
-name: Wallets Hub CI
+name: Active Cash CI
 
 on:
   push:

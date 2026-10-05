@@ -10,7 +10,7 @@ public sealed class OperationsNotificationWorker(IServiceScopeFactory scopeFacto
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await Dispatch(stoppingToken); }
-            catch (Exception exception) { logger.LogError(exception, "Wallets Hub operational notification dispatch failed."); }
+            catch (Exception exception) { logger.LogError(exception, "Active Cash operational notification dispatch failed."); }
             await timer.WaitForNextTickAsync(stoppingToken);
         }
     }

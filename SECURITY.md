@@ -1,4 +1,4 @@
-# Wallets Hub security model
+# Active Cash security model
 
 - Organization data is isolated by mandatory `OrganizationId` predicates.
 - Platform administrators manage organization lifecycle but do not have receipt-reading endpoints.

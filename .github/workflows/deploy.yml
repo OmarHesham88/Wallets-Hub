@@ -1,4 +1,4 @@
-name: Deploy Wallets Hub
+name: Deploy Active Cash
 
 on:
   workflow_dispatch:

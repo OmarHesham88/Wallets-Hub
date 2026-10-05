@@ -14,3 +14,4 @@
 *.apk
 *.aab
 .android-signing.local.txt
+.second-platform-admin-password

@@ -94,13 +94,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <aside className={`sidebar ${open ? "open" : ""}`}>
         <div className="brand">
           <Image
-            src={appPath("/wallets-hub-logo.png")}
+            src={appPath("/active-cash-logo.svg")}
             width={48}
             height={48}
-            alt="Wallets Hub"
+            alt="Active Cash"
           />
           <div>
-            <strong>Wallets Hub</strong>
+            <strong>Active Cash</strong>
             <span>{me.data?.organizationName ?? t("Platform console")}</span>
           </div>
           <button
@@ -150,7 +150,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <button className="icon-button" onClick={() => setOpen(true)}>
             <Menu />
           </button>
-          <strong>Wallets Hub</strong>
+          <strong>Active Cash</strong>
           <LanguageToggle compact/>
           {me.data?.role !== "PlatformAdmin" && <Link className="notification-button" href="/notifications" title={t("Notifications")}><Bell size={19}/>{Boolean(notifications.data?.unreadCount) && <span>{notifications.data!.unreadCount > 99 ? "99+" : notifications.data!.unreadCount}</span>}</Link>}
           {native && <Link className="icon-button native-phone-link" href="/pair-device" title={t("This phone")}><Smartphone size={19}/></Link>}

@@ -51,10 +51,10 @@ jobs:
         run: chmod +x ./gradlew && ./gradlew assembleRelease --no-daemon
         working-directory: frontend/wallets-hub-web/android
       - name: Prepare installable APK
-        run: cp frontend/wallets-hub-web/android/app/build/outputs/apk/release/app-release.apk wallets-hub.apk
+        run: cp frontend/wallets-hub-web/android/app/build/outputs/apk/release/app-release.apk active-cash.apk
       - name: Verify APK signature
         run: |
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs wallets-hub.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs active-cash.apk
       - name: Configure deployment SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -69,12 +69,12 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          scp -i "$HOME/.ssh/walletshub_deploy" wallets-hub.apk "$DEPLOY_USER@$DEPLOY_HOST:/tmp/wallets-hub.apk.new"
+          scp -i "$HOME/.ssh/walletshub_deploy" active-cash.apk "$DEPLOY_USER@$DEPLOY_HOST:/tmp/active-cash.apk.new"
           ssh -i "$HOME/.ssh/walletshub_deploy" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "install -d /opt/servicehub/walletshub-downloads && mv /tmp/wallets-hub.apk.new /opt/servicehub/walletshub-downloads/wallets-hub.apk"
+            "install -d /opt/servicehub/walletshub-downloads && mv /tmp/active-cash.apk.new /opt/servicehub/walletshub-downloads/active-cash.apk && cp /opt/servicehub/walletshub-downloads/active-cash.apk /opt/servicehub/walletshub-downloads/wallets-hub.apk"
       - name: Replace current Android release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete android-latest --yes --cleanup-tag || true
-          gh release create android-latest wallets-hub.apk --target "$GITHUB_SHA" --title "Wallets Hub Android" --notes "Current signed Wallets Hub Android application. If you previously installed the preview build, uninstall it once before installing this release." --latest
+          gh release create android-latest active-cash.apk --target "$GITHUB_SHA" --title "Active Cash Android" --notes "Current signed Active Cash Android application. Existing Wallets Hub installations can update directly without losing their device pairing." --latest

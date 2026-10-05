@@ -1,4 +1,4 @@
-name: Backup Wallets Hub database
+name: Backup Active Cash database
 
 on:
   schedule:

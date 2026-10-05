@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, ShieldCheck, Smartphone } from "lu
 import { api, appPath, User } from "@/lib/api";
 import { useIsNative } from "@/lib/wallet-native";
 import { LanguageToggle, useI18n } from "@/components/i18n";
+import Link from "next/link";
 
 export default function LoginPage() {
   const { t } = useI18n();
@@ -46,14 +47,14 @@ export default function LoginPage() {
         <div className="login-brand">
           <span className="login-mark">
             <Image
-              src={appPath("/wallets-hub-logo.png")}
-              width={104}
-              height={104}
-              alt="Wallets Hub"
+              src={appPath("/active-cash-logo.svg")}
+              width={52}
+              height={52}
+              alt="Active Cash"
             />
           </span>
           <div>
-            <strong>Wallets Hub</strong>
+            <strong>Active Cash</strong>
             <span>{t("Payment operations, clearly managed.")}</span>
           </div>
         </div>
@@ -82,14 +83,14 @@ export default function LoginPage() {
           <div className="login-mobile-brand">
             <span className="login-mark">
               <Image
-                src={appPath("/wallets-hub-logo.png")}
-                width={104}
-                height={104}
+                src={appPath("/active-cash-logo.svg")}
+                width={52}
+                height={52}
                 alt=""
               />
             </span>
             <div>
-              <strong>Wallets Hub</strong>
+              <strong>Active Cash</strong>
               <span>{t("Payment operations, clearly managed.")}</span>
             </div>
           </div>
@@ -97,7 +98,7 @@ export default function LoginPage() {
           <span className="eyebrow">{t("Secure workspace")}</span>
           <h2>{t("Welcome back")}</h2>
           <p>
-            {t("Sign in with the account created by your Wallets Hub administrator.")}
+            {t("Sign in to your Active Cash workspace.")}
           </p>
           {!requiresTwoFactor && <label>
             {t("Email address")}
@@ -133,6 +134,7 @@ export default function LoginPage() {
           <small>
             {t("Sessions stay securely signed in for up to one year unless you log out.")}
           </small>
+          <Link className="login-back-link" href="/signup">{t("New to Active Cash? Create an account")}<ArrowRight size={15}/></Link>
         </form>
       </section>
     </main>

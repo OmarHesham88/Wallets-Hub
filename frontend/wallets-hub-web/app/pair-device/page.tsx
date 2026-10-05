@@ -97,14 +97,14 @@ export default function PairDevicePage() {
       <main className="login-panel"><div className="login-language"><LanguageToggle/></div>
         <div className="login-card">
           <Image
-            src={appPath("/wallets-hub-logo.png")}
+            src={appPath("/active-cash-logo.svg")}
             width={64}
             height={64}
-            alt="Wallets Hub"
+            alt="Active Cash"
           />
-          <h2>Wallets Hub capture app</h2>
+          <h2>Active Cash capture app</h2>
           <p>
-            This secure pairing screen is available inside the Wallets Hub
+            This secure pairing screen is available inside the Active Cash
             Android application.
           </p>
           <a className="btn" href={appPath("/login")}>
@@ -118,20 +118,20 @@ export default function PairDevicePage() {
       <div className="login-card">
         <div className="login-brand">
           <Image
-            src={appPath("/wallets-hub-logo.png")}
+            src={appPath("/active-cash-logo.svg")}
             width={58}
             height={58}
-            alt="Wallets Hub"
+            alt="Active Cash"
           />
           <div>
-            <strong>Wallets Hub</strong>
+            <strong>Active Cash</strong>
             <span>Secure capture device</span>
           </div>
         </div>
         <div className="notice" style={{ marginTop: 24 }}>
           <div className="card-top" style={{ gap: 14 }}>
             <div>
-              <strong>{accountDestination === "/login" ? "Manage your Wallets Hub" : "Your management account"}</strong>
+              <strong>{accountDestination === "/login" ? "Manage your Active Cash" : "Your management account"}</strong>
               <p className="muted" style={{ margin: "4px 0 0" }}>
                 {accountDestination === "/login" ? "Sign in to access wallets, employees, payments, and reports." : "Open the complete dashboard, reports, wallets, and team controls."}
               </p>
@@ -200,7 +200,7 @@ export default function PairDevicePage() {
             )}
             {!status.axisNotificationAccess && (
               <div className="notice" style={{ marginTop: 14 }}>
-                <strong>Connect app-notification wallets:</strong> allow Wallets Hub in notification access.
+                <strong>Connect app-notification wallets:</strong> allow Active Cash in notification access.
                 <button className="btn btn-secondary btn-wide" style={{ marginTop: 10 }} onClick={() => WalletCapture.openNotificationAccessSettings()}>Allow notification capture</button>
               </div>
             )}

@@ -25,6 +25,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Seed__PlatformEmail: ${WALLETSHUB_PLATFORM_EMAIL}
       Seed__PlatformPassword: ${WALLETSHUB_PLATFORM_PASSWORD}
+      Seed__SecondPlatformEmail: ${WALLETSHUB_SECOND_PLATFORM_EMAIL:-admin2@activecash.local}
+      Seed__SecondPlatformPassword: ${WALLETSHUB_SECOND_PLATFORM_PASSWORD:-}
     depends_on:
       walletshub-db:
         condition: service_healthy

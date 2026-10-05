@@ -11,6 +11,18 @@ test -f "$app_dir/.env.production" || {
   exit 1
 }
 
+# Keep a second full platform administrator available. Generate its temporary
+# password once and retain it outside the release archive.
+if ! grep -Eq '^WALLETSHUB_SECOND_PLATFORM_PASSWORD=.+$' "$app_dir/.env.production"; then
+  second_password="Ac9$(openssl rand -hex 20 | cut -c1-24)"
+  {
+    printf '\nWALLETSHUB_SECOND_PLATFORM_EMAIL=admin2@activecash.local\n'
+    printf 'WALLETSHUB_SECOND_PLATFORM_PASSWORD=%s\n' "$second_password"
+  } >> "$app_dir/.env.production"
+  printf '%s\n' "$second_password" > "$app_dir/.second-platform-admin-password"
+  chmod 600 "$app_dir/.second-platform-admin-password" "$app_dir/.env.production"
+fi
+
 if test -f "$app_dir/$compose_file"; then
   echo "Creating pre-deploy backup"
   install -d -m 700 "$backup_dir"
@@ -28,7 +40,7 @@ if test -f "$app_dir/$compose_file"; then
 fi
 
 echo "Installing release files and images"
-find "$app_dir" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password -exec rm -rf -- {} +
+find "$app_dir" -mindepth 1 -maxdepth 1 ! -name .env.production ! -name .initial-admin-password ! -name .second-platform-admin-password -exec rm -rf -- {} +
 tar -xzf /tmp/walletshub-source.tar.gz -C "$app_dir"
 gzip -dc /tmp/walletshub-images.tar.gz | docker load
 
@@ -50,7 +62,7 @@ docker exec "$caddy_container" caddy reload --config /etc/caddy/Caddyfile --adap
 for attempt in $(seq 1 36); do
   status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://servicehub.ink/wallets/capture-health || true)"
   if test "$status" = "200"; then
-    echo "Public Wallets Hub release verified"
+    echo "Public Active Cash release verified"
     rm -f /tmp/walletshub-images.tar.gz /tmp/walletshub-source.tar.gz /tmp/walletshub-deploy.sh
     exit 0
   fi

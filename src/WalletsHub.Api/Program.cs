@@ -46,6 +46,9 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
         ClientIp(context),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
+    options.AddPolicy("signup", context => RateLimitPartition.GetFixedWindowLimiter(
+        ClientIp(context),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromHours(1), QueueLimit = 0 }));
     options.AddPolicy("pairing", context => RateLimitPartition.GetFixedWindowLimiter(
         ClientIp(context),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(10), QueueLimit = 0 }));
@@ -76,18 +79,19 @@ app.Use(async (context, next) =>
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden; return;
     }
-    if (context.User.Identity?.IsAuthenticated == true && !context.User.IsInRole(Roles.PlatformAdmin))
+    if (context.User.Identity?.IsAuthenticated == true && !context.User.IsInRole(Roles.PlatformAdmin)
+        && !context.Request.Path.StartsWithSegments("/api/auth"))
     {
         var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
         var db = context.RequestServices.GetRequiredService<WalletsDbContext>();
-        var allowed = userId is not null && await db.Users.AnyAsync(user => user.Id == userId && user.IsActive && user.OrganizationId != null && db.Organizations.Any(org => org.Id == user.OrganizationId && org.IsActive));
+        var allowed = userId is not null && await db.Users.AnyAsync(user => user.Id == userId && user.IsActive && user.OrganizationId != null && db.Organizations.Any(org => org.Id == user.OrganizationId && org.IsActive && org.SubscriptionEndsAtUtc > DateTime.UtcNow));
         if (!allowed) { context.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
     }
     await next();
 });
 app.UseAuthorization();
 app.MapHealthChecks("/health/live");
-app.MapGet("/", () => Results.Ok(new { product = "Wallets Hub", version = "0.1.0" }));
+app.MapGet("/", () => Results.Ok(new { product = "Active Cash", version = "1.0.0" }));
 
 MapAuth(app);
 MapPlatform(app);
@@ -115,9 +119,16 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "MaskSensitiveMessages" boolean NOT NULL DEFAULT false;
         ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "RequireReceiptConfirmation" boolean NOT NULL DEFAULT true;
         ALTER TABLE "Organizations" ALTER COLUMN "RequireReceiptConfirmation" SET DEFAULT true;
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "SubscriptionStartsAtUtc" timestamp with time zone NULL;
+        ALTER TABLE "Organizations" ADD COLUMN IF NOT EXISTS "SubscriptionEndsAtUtc" timestamp with time zone NULL;
+        -- Grandfather workspaces that existed before subscriptions were introduced.
+        UPDATE "Organizations"
+           SET "SubscriptionStartsAtUtc" = COALESCE("SubscriptionStartsAtUtc", NOW()),
+               "SubscriptionEndsAtUtc" = NOW() + INTERVAL '365 days'
+         WHERE "SubscriptionEndsAtUtc" IS NULL AND "CreatedAtUtc" < TIMESTAMPTZ '2026-10-05 00:00:00+00';
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "AllWalletAccess" boolean NOT NULL DEFAULT false;
         ALTER TABLE "AspNetUsers" ADD COLUMN IF NOT EXISTS "CanConfirmReceipts" boolean NOT NULL DEFAULT false;
-        -- Rejection was removed from Wallets Hub. Older production databases can
+        -- Rejection was removed from Active Cash. Older production databases can
         -- still contain this required column, which blocks creation of new users
         -- because the current identity model no longer writes a value for it.
         ALTER TABLE "AspNetUsers" DROP COLUMN IF EXISTS "CanRejectReceipts";
@@ -176,7 +187,7 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_NotificationDispatches_DispatchKey" ON "NotificationDispatches" ("DispatchKey");
 
-        -- Wallets Hub is EGP-only. Remove legacy Binance, USD, and USDT data in
+        -- Active Cash is EGP-only. Remove legacy Binance, USD, and USDT data in
         -- dependency order while keeping unrelated EGP history intact.
         DELETE FROM "UserNotifications"
           WHERE "SourceId" IN (SELECT "Id" FROM "WalletReceipts" WHERE "CurrencyCode" <> 'EGP' OR "Provider" = 'Binance')
@@ -215,8 +226,16 @@ static void MapAuth(WebApplication app)
     {
         var user = await users.FindByEmailAsync(request.Email.Trim());
         if (user is null || !user.IsActive) return Results.Problem(statusCode: 401, title: "Invalid credentials");
-        if (user.OrganizationId.HasValue && !await db.Organizations.AnyAsync(x => x.Id == user.OrganizationId && x.IsActive))
-            return Results.Problem(statusCode: 403, title: "This client workspace is suspended");
+        if (user.OrganizationId.HasValue)
+        {
+            var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == user.OrganizationId);
+            if (organization is null || !organization.IsActive)
+                return Results.Problem(statusCode: 403, title: "This client workspace is suspended");
+            if (!organization.SubscriptionEndsAtUtc.HasValue)
+                return Results.Problem(statusCode: 403, title: "Your Active Cash subscription is awaiting activation");
+            if (organization.SubscriptionEndsAtUtc <= DateTime.UtcNow)
+                return Results.Problem(statusCode: 403, title: "Your Active Cash subscription has expired");
+        }
         var result = await signIn.PasswordSignInAsync(user, request.Password, isPersistent: true, lockoutOnFailure: true);
         if (result.RequiresTwoFactor)
         {
@@ -232,6 +251,25 @@ static void MapAuth(WebApplication app)
         await db.SaveChangesAsync();
         return Results.NoContent();
     }).RequireRateLimiting("login");
+    auth.MapPost("/signup", async (SignupRequest request, WalletsDbContext db, UserManager<AppUser> users) =>
+    {
+        var company = request.CompanyName.Trim(); var ownerName = request.OwnerName.Trim(); var email = request.Email.Trim();
+        if (company.Length < 2 || ownerName.Length < 2) return Results.BadRequest(new { error = "Company and owner names must contain at least two characters." });
+        if (await users.FindByEmailAsync(email) is not null) return Results.Conflict(new { error = "That email address is already registered." });
+        var baseSlug = Slug(company); if (baseSlug.Length == 0) baseSlug = "workspace";
+        var slug = baseSlug; var suffix = 2;
+        while (await db.Organizations.AnyAsync(x => x.Slug == slug)) slug = $"{baseSlug}-{suffix++}";
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var organization = new Organization { Name = company, Slug = slug, IsActive = true };
+        db.Organizations.Add(organization); await db.SaveChangesAsync();
+        var owner = new AppUser { UserName = email, Email = email, EmailConfirmed = true, DisplayName = ownerName, OrganizationId = organization.Id, AllWalletAccess = true, CanViewReports = true, CanExportReports = true, CanManageDevices = true, CanManageTeam = true, CanConfirmReceipts = true, VisibleReceiptDays = 3650 };
+        var created = await users.CreateAsync(owner, request.Password);
+        if (!created.Succeeded) { await transaction.RollbackAsync(); return Results.BadRequest(new { error = string.Join("; ", created.Errors.Select(x => x.Description)) }); }
+        await users.AddToRoleAsync(owner, Roles.Owner);
+        db.AuditEvents.Add(Audit(organization.Id, owner.Id, "WorkspaceSignup", nameof(Organization), organization.Id.ToString(), new { organization.Name, owner.Email }));
+        await db.SaveChangesAsync(); await transaction.CommitAsync();
+        return Results.Created("/api/auth/signup", new { message = "Your workspace was created and is awaiting subscription activation.", organization.Name, organization.Slug });
+    }).RequireRateLimiting("signup");
     auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
     auth.MapGet("/me", async (ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -268,7 +306,7 @@ static void MapAuth(WebApplication app)
         if (user is null) return Results.Unauthorized();
         await users.ResetAuthenticatorKeyAsync(user);
         var key = await users.GetAuthenticatorKeyAsync(user);
-        var issuer = Uri.EscapeDataString("Wallets Hub");
+        var issuer = Uri.EscapeDataString("Active Cash");
         var account = Uri.EscapeDataString(user.Email ?? user.UserName ?? user.Id);
         return Results.Ok(new { secretKey = key, authenticatorUri = $"otpauth://totp/{issuer}:{account}?secret={key}&issuer={issuer}&digits=6" });
     }).RequireAuthorization();
@@ -306,14 +344,15 @@ static void MapPlatform(WebApplication app)
 {
     var platform = app.MapGroup("/api/platform").RequireAuthorization("PlatformAdmin");
     platform.MapGet("/organizations", async (WalletsDbContext db) => await db.Organizations.AsNoTracking().OrderBy(x => x.Name)
-        .Select(x => new { x.Id, x.Name, x.Slug, x.IsActive, x.CreatedAtUtc, Users = db.Users.Count(u => u.OrganizationId == x.Id), Devices = db.WalletDevices.Count(d => d.OrganizationId == x.Id), Wallets = db.Wallets.Count(w => w.OrganizationId == x.Id) }).ToListAsync());
+        .Select(x => new { x.Id, x.Name, x.Slug, x.IsActive, x.SubscriptionStartsAtUtc, x.SubscriptionEndsAtUtc, x.CreatedAtUtc, Users = db.Users.Count(u => u.OrganizationId == x.Id), Devices = db.WalletDevices.Count(d => d.OrganizationId == x.Id), Wallets = db.Wallets.Count(w => w.OrganizationId == x.Id) }).ToListAsync());
     platform.MapPost("/organizations", async (CreateOrganizationRequest request, WalletsDbContext db, UserManager<AppUser> users) =>
     {
         var slug = Slug(request.Slug ?? request.Name);
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(slug)) return Results.BadRequest(new { error = "Organization name is required." });
         if (await db.Organizations.AnyAsync(x => x.Slug == slug)) return Results.Conflict(new { error = "That organization URL is already used." });
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var organization = new Organization { Name = request.Name.Trim(), Slug = slug };
+        var days = Math.Clamp(request.ActivationDays ?? 30, 1, 3650); var now = DateTime.UtcNow;
+        var organization = new Organization { Name = request.Name.Trim(), Slug = slug, SubscriptionStartsAtUtc = now, SubscriptionEndsAtUtc = now.AddDays(days) };
         db.Organizations.Add(organization);
         await db.SaveChangesAsync();
         var owner = new AppUser
@@ -337,6 +376,61 @@ static void MapPlatform(WebApplication app)
         db.AuditEvents.Add(Audit(id, null, request.Enabled ? "OrganizationActivated" : "OrganizationSuspended", nameof(Organization), id.ToString()));
         await db.SaveChangesAsync();
         return Results.NoContent();
+    });
+    platform.MapPut("/organizations/{id:guid}/subscription", async (Guid id, SubscriptionRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var actor = await users.GetUserAsync(principal); if (actor is null) return Results.Unauthorized();
+        var organization = await db.Organizations.SingleOrDefaultAsync(x => x.Id == id); if (organization is null) return Results.NotFound();
+        if (request.Active)
+        {
+            if (!request.Days.HasValue || request.Days < 1 || request.Days > 3650) return Results.BadRequest(new { error = "Choose an activation period from 1 to 3650 days." });
+            organization.SubscriptionStartsAtUtc = DateTime.UtcNow; organization.SubscriptionEndsAtUtc = DateTime.UtcNow.AddDays(request.Days.Value);
+        }
+        else organization.SubscriptionEndsAtUtc = DateTime.UtcNow;
+        db.AuditEvents.Add(Audit(id, actor.Id, request.Active ? "SubscriptionActivated" : "SubscriptionDeactivated", nameof(Organization), id.ToString(), new { request.Days, organization.SubscriptionStartsAtUtc, organization.SubscriptionEndsAtUtc }));
+        await db.SaveChangesAsync(); return Results.NoContent();
+    });
+    platform.MapDelete("/organizations/{id:guid}", async (Guid id, DeleteOrganizationRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var actor = await users.GetUserAsync(principal); if (actor is null) return Results.Unauthorized();
+        var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id); if (organization is null) return Results.NotFound();
+        if (!string.Equals(request.Confirmation, organization.Name, StringComparison.Ordinal)) return Results.BadRequest(new { error = "Enter the exact customer name to confirm permanent deletion." });
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            DELETE FROM "UserWalletAccess" WHERE "UserId" IN (SELECT "Id" FROM "AspNetUsers" WHERE "OrganizationId" = {id}) OR "WalletId" IN (SELECT "Id" FROM "Wallets" WHERE "OrganizationId" = {id});
+            DELETE FROM "NotificationPreferences" WHERE "OrganizationId" = {id};
+            DELETE FROM "UserNotifications" WHERE "OrganizationId" = {id};
+            DELETE FROM "CaptureEvents" WHERE "OrganizationId" = {id};
+            DELETE FROM "WalletReceipts" WHERE "OrganizationId" = {id};
+            DELETE FROM "WalletLedgerEntries" WHERE "OrganizationId" = {id};
+            DELETE FROM "WalletReconciliations" WHERE "OrganizationId" = {id};
+            DELETE FROM "NotificationDispatches" WHERE "OrganizationId" = {id};
+            DELETE FROM "AuditEvents" WHERE "OrganizationId" = {id};
+            DELETE FROM "AspNetUserTokens" WHERE "UserId" IN (SELECT "Id" FROM "AspNetUsers" WHERE "OrganizationId" = {id});
+            DELETE FROM "AspNetUserClaims" WHERE "UserId" IN (SELECT "Id" FROM "AspNetUsers" WHERE "OrganizationId" = {id});
+            DELETE FROM "AspNetUserLogins" WHERE "UserId" IN (SELECT "Id" FROM "AspNetUsers" WHERE "OrganizationId" = {id});
+            DELETE FROM "AspNetUserRoles" WHERE "UserId" IN (SELECT "Id" FROM "AspNetUsers" WHERE "OrganizationId" = {id});
+            DELETE FROM "AspNetUsers" WHERE "OrganizationId" = {id};
+            DELETE FROM "Wallets" WHERE "OrganizationId" = {id};
+            DELETE FROM "WalletDevices" WHERE "OrganizationId" = {id};
+            DELETE FROM "Organizations" WHERE "Id" = {id};
+            """);
+        db.AuditEvents.Add(Audit(null, actor.Id, "OrganizationPermanentlyDeleted", nameof(Organization), id.ToString(), new { organization.Name, organization.Slug }));
+        await db.SaveChangesAsync(); await transaction.CommitAsync(); return Results.NoContent();
+    });
+    platform.MapGet("/administrators", async (WalletsDbContext db) =>
+    {
+        var roleId = await db.Roles.Where(x => x.Name == Roles.PlatformAdmin).Select(x => x.Id).SingleAsync();
+        return Results.Ok(await db.Users.AsNoTracking().Where(x => db.UserRoles.Any(r => r.UserId == x.Id && r.RoleId == roleId)).OrderBy(x => x.Email).Select(x => new { x.Id, x.DisplayName, x.Email, x.IsActive, x.CreatedAtUtc }).ToListAsync());
+    });
+    platform.MapPost("/administrators", async (CreatePlatformAdminRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
+    {
+        var actor = await users.GetUserAsync(principal); if (actor is null) return Results.Unauthorized();
+        var email = request.Email.Trim(); if (await users.FindByEmailAsync(email) is not null) return Results.Conflict(new { error = "That email is already registered." });
+        var admin = new AppUser { UserName = email, Email = email, EmailConfirmed = true, DisplayName = request.DisplayName.Trim(), IsActive = true, VisibleReceiptDays = 3650 };
+        var created = await users.CreateAsync(admin, request.Password); if (!created.Succeeded) return Results.BadRequest(new { error = string.Join("; ", created.Errors.Select(x => x.Description)) });
+        await users.AddToRoleAsync(admin, Roles.PlatformAdmin); db.AuditEvents.Add(Audit(null, actor.Id, "PlatformAdministratorCreated", nameof(AppUser), admin.Id, new { admin.Email })); await db.SaveChangesAsync();
+        return Results.Created($"/api/platform/administrators/{admin.Id}", new { admin.Id, admin.DisplayName, admin.Email });
     });
     platform.MapPost("/organizations/{id:guid}/reset-owner-password", async (Guid id, PlatformOwnerPasswordResetRequest request, ClaimsPrincipal principal, UserManager<AppUser> users, WalletsDbContext db) =>
     {
@@ -1176,13 +1270,13 @@ static void MapReports(WebApplication app)
         sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#E8F7EF");
         sheet.SheetView.FreezeRows(1); sheet.Columns().AdjustToContents();
         var summary = workbook.Worksheets.Add("Summary");
-        summary.Cell(1, 1).Value = "Wallets Hub report"; summary.Cell(1, 1).Style.Font.Bold = true;
+        summary.Cell(1, 1).Value = "Active Cash report"; summary.Cell(1, 1).Style.Font.Bold = true;
         summary.Cell(2, 1).Value = "From (UTC)"; summary.Cell(2, 2).Value = start;
         summary.Cell(3, 1).Value = "To (UTC)"; summary.Cell(3, 2).Value = end;
         var grouped = rows.GroupBy(x => x.Receipt.CurrencyCode).ToList(); var summaryRow = 5;
         foreach (var group in grouped) { summary.Cell(summaryRow, 1).Value = group.Key; summary.Cell(summaryRow, 2).Value = group.Count(); summary.Cell(summaryRow, 3).Value = group.Sum(x => x.Receipt.Amount); summaryRow++; }
         using var stream = new MemoryStream(); workbook.SaveAs(stream);
-        return Results.File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"wallets-hub-{DateTime.UtcNow:yyyyMMdd}.xlsx");
+        return Results.File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"active-cash-{DateTime.UtcNow:yyyyMMdd}.xlsx");
     }).RequireAuthorization();
 }
 
@@ -1201,12 +1295,21 @@ static async Task SeedAsync(IServiceProvider services, IConfiguration configurat
         select user).FirstOrDefaultAsync();
     if (existingPlatformAdmin is null)
     {
-        var email = configuration["Seed:PlatformEmail"] ?? "admin@walletshub.local";
+        var email = configuration["Seed:PlatformEmail"] ?? "admin@activecash.local";
         var password = configuration["Seed:PlatformPassword"] ?? throw new InvalidOperationException("Seed:PlatformPassword is required.");
-        var user = new AppUser { UserName = email, Email = email, EmailConfirmed = true, DisplayName = "Wallets Hub Platform Admin", IsActive = true, VisibleReceiptDays = 3650 };
+        var user = new AppUser { UserName = email, Email = email, EmailConfirmed = true, DisplayName = "Active Cash Platform Admin", IsActive = true, VisibleReceiptDays = 3650 };
         var result = await users.CreateAsync(user, password);
         if (!result.Succeeded) throw new InvalidOperationException(string.Join("; ", result.Errors.Select(x => x.Description)));
         await users.AddToRoleAsync(user, Roles.PlatformAdmin);
+    }
+    var secondEmail = configuration["Seed:SecondPlatformEmail"];
+    var secondPassword = configuration["Seed:SecondPlatformPassword"];
+    if (!string.IsNullOrWhiteSpace(secondEmail) && !string.IsNullOrWhiteSpace(secondPassword) && await users.FindByEmailAsync(secondEmail) is null)
+    {
+        var second = new AppUser { UserName = secondEmail, Email = secondEmail, EmailConfirmed = true, DisplayName = "Active Cash Administrator 2", IsActive = true, VisibleReceiptDays = 3650 };
+        var result = await users.CreateAsync(second, secondPassword);
+        if (!result.Succeeded) throw new InvalidOperationException(string.Join("; ", result.Errors.Select(x => x.Description)));
+        await users.AddToRoleAsync(second, Roles.PlatformAdmin);
     }
 }
 
@@ -1317,21 +1420,25 @@ static string? Clean(string? value, int maxLength) { var clean = value?.Trim(); 
 static string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim() ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 static string NormalizeAccount(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", _ => throw new BadHttpRequestException("Wallets Hub supports EGP only.") };
+static string NormalizeCurrency(string value) => value.Trim().ToUpperInvariant() switch { "EGP" => "EGP", _ => throw new BadHttpRequestException("Active Cash supports EGP only.") };
 static void ValidateProviderCurrency(string provider, string currency)
 {
     if (provider.Equals("Binance", StringComparison.OrdinalIgnoreCase)) throw new BadHttpRequestException("Binance wallets are not supported.");
-    if (currency != "EGP") throw new BadHttpRequestException("Wallets Hub supports EGP only.");
+    if (currency != "EGP") throw new BadHttpRequestException("Active Cash supports EGP only.");
 }
 static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries).Select(part => new string(part.Where(char.IsLetterOrDigit).ToArray())).Where(part => part.Length > 0));
 static string Unprotect(IDataProtector protector, string value) { try { return protector.Unprotect(value); } catch { return "Message unavailable"; } }
 
 public sealed record LoginRequest(string Email, string Password, string? TwoFactorCode = null);
+public sealed record SignupRequest(string CompanyName, string OwnerName, string Email, string Password);
 public sealed record AccountUpdateRequest(string DisplayName, string Email, string CurrentPassword, string? NewPassword);
 public sealed record MfaCodeRequest(string Code);
 public sealed record PasswordRequest(string Password);
 public sealed record PlatformAccountUpdateRequest(string Email, string CurrentPassword, string? NewPassword);
-public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword);
+public sealed record CreateOrganizationRequest(string Name, string? Slug, string OwnerName, string OwnerEmail, string OwnerPassword, int? ActivationDays = 30);
+public sealed record SubscriptionRequest(bool Active, int? Days);
+public sealed record DeleteOrganizationRequest(string Confirmation);
+public sealed record CreatePlatformAdminRequest(string DisplayName, string Email, string Password);
 public sealed record PlatformOwnerPasswordResetRequest(string OwnerEmail, string NewPassword);
 public sealed record ToggleRequest(bool Enabled);
 public sealed record CreateTeamMemberRequest(string DisplayName, string Email, string Password, string Role, int VisibleReceiptDays, bool CanViewReports, bool CanExportReports, bool CanManageDevices, bool CanManageTeam, bool CanConfirmReceipts, bool AllWalletAccess, IReadOnlyCollection<Guid> WalletIds);

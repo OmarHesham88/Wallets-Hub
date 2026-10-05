@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Active Cash</title>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18a66a"/>
+      <stop offset="1" stop-color="#08764d"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bg)"/>
+  <path d="M28 83 51 35c2.4-5 9.6-5 12 0l23 48h-18l-5.5-13H43.7l-5.6 13H28Zm21.2-27h7.9L53.2 46l-4 10Z" fill="#fff"/>
+  <path d="M93 44c-18 0-31 11-31 26s13 26 31 26c6.7 0 12.5-1.4 17-4.2V77c-4 3.5-9 5.2-14.8 5.2-8.3 0-14.2-4.8-14.2-12.2s5.9-12.2 14.2-12.2c5.8 0 10.8 1.7 14.8 5.2V48.2C105.5 45.4 99.7 44 93 44Z" fill="#bff8dc"/>
+  <circle cx="101" cy="31" r="8" fill="#fff" opacity=".95"/>
+</svg>

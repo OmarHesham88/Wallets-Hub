@@ -1,6 +1,6 @@
-# Wallets Hub
+# Active Cash
 
-Wallets Hub is an independent, multi-tenant wallet-payment operations product. It does not share ServiceHub's database or application runtime.
+Active Cash is an independent, multi-tenant wallet-payment operations product. It does not share ServiceHub's database or application runtime. Internal project paths retain the original `WalletsHub` identifier so existing installations and encrypted receipt history remain upgrade-compatible.
 
 ## Product hierarchy
 
@@ -46,7 +46,7 @@ dotnet run --project src/WalletsHub.Api -- --seed
 ## Android pairing
 
 1. An owner or authorized user creates a device from **Devices**.
-2. Wallets Hub returns a six-digit code valid for ten minutes.
+2. Active Cash returns a six-digit code valid for ten minutes.
 3. The Android app opens its pairing screen and exchanges the code for a device-only token.
 4. The phone never stores an employee password or web session.
 5. The phone filters payment events locally and uploads only matching receipts through `/api/captures`.

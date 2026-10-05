@@ -16,7 +16,7 @@ keys="${backup%.sql.gz}.keys.tar.gz"
 gzip -t "$keys"
 
 cd "$HOME/walletshub"
-read -r -p "This replaces the Wallets Hub database from $(basename "$backup"). Type RESTORE: " confirmation
+read -r -p "This replaces the Active Cash database from $(basename "$backup"). Type RESTORE: " confirmation
 [[ "$confirmation" == "RESTORE" ]] || { echo "Cancelled."; exit 1; }
 
 docker compose --env-file .env.production -f docker-compose.production.yml stop walletshub-api walletshub-web

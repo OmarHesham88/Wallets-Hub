@@ -24,6 +24,8 @@ public sealed class Organization
     public string TimeZoneId { get; set; } = "Africa/Cairo";
     public bool MaskSensitiveMessages { get; set; }
     public bool RequireReceiptConfirmation { get; set; } = true;
+    public DateTime? SubscriptionStartsAtUtc { get; set; }
+    public DateTime? SubscriptionEndsAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
